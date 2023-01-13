@@ -1,0 +1,31 @@
+<html lang="">
+<head><title>Game</title></head>
+<body>
+<h1>Game</h1>
+<table>
+    {% for world in game.worlds %}
+        <td> id {{ world.id }}</td>
+        <td> name {{ world.name }}</td>
+        <td> owner {{ world.owner }}</td>
+        <td> connections</td>
+        <table>
+        {% for connection in world.connections %}
+            <tr>
+                <td> {{ connection.id }} </td>
+                <td> {{ connection.name }} </td>
+                <td> {{ connection.owner }} </td>
+            </tr>
+        {% endfor %}
+        <td>{{ world.iships }}</td>
+        <td>{{ world.pships }}</td>
+        <td>{{ world.population }}</td>
+        <td>{{ world.max_population }}</td>
+        <td>{{ world.industry }}</td>
+        <td>{{ world.mines }}</td>
+        <td>{{ world.stockpile }}</td>
+        <td> artifacts {{ world.artifacts }}</td>
+        </tr>
+    {% endfor %}
+    </table>
+</body>
+</html>
