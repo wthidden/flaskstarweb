@@ -8,7 +8,10 @@
 </head>
 <body>
 <comment> rendering a list of Fleet objects that is defined in app.py by flask framework and jina2 markup</comment>
-
-
+<ul>
+    {% for fleet in fleets %}
+        <li>{{ fleet.name }}</li>
+    {% endfor %}
+</ul>
 </body>
 </html>

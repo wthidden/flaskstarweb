@@ -9,66 +9,6 @@ character_types = {"Empire Builder", "Merchant", "Pirate", "Artifact Collector",
 player_commands = {"Transfer", "Build", "Move", "Fire", "Ambush", "Gift", "Trade", "Diplomacy", "Research", "End Turn"}
 
 
-class Player:
-    def __init__(self, name, character_type, home_world, diplomacy, worlds, fleets):
-        self.name = name
-        self.character_type = character_type
-        self.home_world = home_world
-        self.diplomacy = diplomacy
-        self.worlds = worlds
-        self.fleets = fleets
-        self.character = self.create_character()
-
-    def create_character(self):
-        if self.character_type == "Empire Builder":
-            return EmpireBuilder(self.name)
-        elif self.character_type == "Merchant":
-            return Merchant(self.name)
-        elif self.character_type == "Pirate":
-            return Pirate(self.name)
-        elif self.character_type == "Artifact Collector":
-            return ArtifactCollector(self.name)
-        elif self.character_type == "Berserker":
-            return Berserker(self.name)
-        else:
-            return None
-
-
-class EmpireBuilder: Player
-
-
-def __init__(self, name):
-    self.name = name
-
-
-class Merchant: Player
-
-
-def __init__(self, name):
-    self.name = name
-
-
-class Pirate: Player
-
-
-def __init__(self, name):
-    self.name = name
-
-
-class ArtifactCollector: Player
-
-
-def __init__(self, name):
-    self.name = name
-
-
-class Berserker: Player
-
-
-def __init__(self, name):
-    self.name = name
-
-
 class StarWeb:
     """This is a docstring for the StarWeb class"""
 
@@ -114,7 +54,91 @@ class Fleet:
         self.artifacts = artifacts
 
 
-# string that renders a fleet object using jinja2
+class EmpireBuilder:
+    """This is a docstring for the EmpireBuilder class"""
+
+    def __init__(self, id, name, world, fleets, artifacts, ships):
+        self.id = id
+        self.name = name
+        self.world = world
+        self.fleets = fleets
+        self.artifacts = artifacts
+        self.ships = ships
+
+
+class Merchant:
+    """This is a docstring for the Merchant class"""
+
+    def __init__(self, id, name, world, fleets, artifacts, ships):
+        self.id = id
+        self.name = name
+        self.world = world
+        self.fleets = fleets
+        self.artifacts = artifacts
+        self.ships = ships
+
+
+class Pirate:
+    """This is a docstring for the Pirate class"""
+
+    def __init__(self, id, name, world, fleets, artifacts, ships):
+        self.id = id
+        self.name = name
+        self.world = world
+        self.fleets = fleets
+        self.artifacts = artifacts
+        self.ships = ships
+
+
+class ArtifactCollector:
+    """This is a docstring for the ArtifactCollector class"""
+
+    def __init__(self, id, name, world, fleets, artifacts, ships):
+        self.id = id
+        self.name = name
+        self.world = world
+        self.fleets = fleets
+        self.artifacts = artifacts
+        self.ships = ships
+
+
+class Berserker:
+    """This is a docstring for the Berserker class"""
+
+    def __init__(self, id, name, world, fleets, artifacts, ships):
+        self.id = id
+        self.name = name
+        self.world = world
+        self.fleets = fleets
+        self.artifacts = artifacts
+        self.ships = ships
+
+
+class Player:
+    def __init__(self, name, character_type, home_world: World, diplomacy, worlds: [], fleets: []):
+        self.name = name
+        self.character_type = character_type
+        self.home_world = home_world
+        self.diplomacy = diplomacy
+        self.worlds = worlds
+        self.fleets = fleets
+        self.character = self.create_character()
+
+    def create_character(self):
+        if self.character_type == "Empire Builder":
+            return EmpireBuilder(self)
+        elif self.character_type == "Merchant":
+            return Merchant(self)
+        elif self.character_type == "Pirate":
+            return Pirate(self)
+        elif self.character_type == "Artifact Collector":
+            return ArtifactCollector(self)
+        elif self.character_type == "Berserker":
+            return Berserker(self)
+        else:
+            return None
+
+
 def stream_fleet(fleet):
     return render_template('fleet.html', fleet=fleet)
 
