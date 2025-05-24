@@ -2,9 +2,18 @@ import random
 import json # Added for parsing JSON
 
 from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_login import LoginManager, UserMixin, login_user, current_user, logout_user, login_required # Added logout_user, login_required
+from werkzeug.security import generate_password_hash, check_password_hash # Already present, good
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Needed for flash messages
+
+# Flask-Login setup
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'  # Name of the login route's view function
+login_manager.login_message_category = 'info'
+
 
 game = None  # Global game instance
 
@@ -149,6 +158,30 @@ class Player:
 
 
 # Order Classes
+
+# User model for Flask-Login
+class User(UserMixin):
+    def __init__(self, username, password):
+        self.id = username # For Flask-Login, id should be a string
+        self.username = username
+        self.password_hash = generate_password_hash(password)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+    def __repr__(self):
+        return f'<User {self.username}>'
+
+users_db = {} # In-memory user store {username: UserObject}
+
+@login_manager.user_loader
+def load_user(user_id): # user_id is username here
+    return users_db.get(user_id)
+
+
 class Order:
     """Base class for player orders."""
     def __init__(self, order_type: str, priority: int):
@@ -717,8 +750,10 @@ class Game:
         # print(msg) # Server log
         return True, msg
 
-    def process_turn(self, raw_orders_list: list[dict]) -> list[str]:
-        """Processes a list of raw order dictionaries for a turn."""
+    def process_turn(self, user_id: str, raw_orders_list: list[dict]) -> list[str]:
+        """Processes a list of raw order dictionaries for a turn, for a given user."""
+        print(f"Processing turn for user: {user_id}") # Log the user processing the turn
+        
         typed_orders: list[Order] = []
         for order_dict in raw_orders_list:
             order_obj = order_from_dict(order_dict) # Uses the global helper
@@ -874,6 +909,7 @@ def hello_world():  # put application's code here
 
 
 @app.route('/game')
+@login_required # Protect this route
 def display_game():
     game_instance = get_or_create_game()
     return render_template('game.html', game=game_instance)
@@ -885,7 +921,59 @@ def move_fleet():
     flash("The direct /move_fleet route is deprecated. Please use the 'Plan Your Turn' interface to move fleets.")
     return redirect(url_for('display_game'))
 
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
+
+        if not username or not password or not confirm_password:
+            flash('All fields are required!', 'danger')
+            return redirect(url_for('register'))
+
+        if password != confirm_password:
+            flash('Passwords do not match!', 'danger')
+            return redirect(url_for('register'))
+
+        if username in users_db: # users_db is global
+            flash('Username already exists. Please choose a different one.', 'warning')
+            return redirect(url_for('register'))
+
+        # Create new user
+        new_user = User(username=username, password=password) # User class should be defined above
+        users_db[username] = new_user # Store user (username is the key/id)
+
+        flash(f'User {username} registered successfully! Please login.', 'success')
+        return redirect(url_for('login')) # Assumes a 'login' route exists
+
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('display_game')) # Or a dashboard route
+
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        user = users_db.get(username) # users_db is global
+
+        if user and user.check_password(password): # User class has check_password
+            login_user(user) # Create session
+            flash('Logged in successfully!', 'success')
+            # Redirect to the page user was trying to access, or a default
+            next_page = request.args.get('next')
+            return redirect(next_page or url_for('display_game'))
+        else:
+            flash('Invalid username or password.', 'danger')
+            return redirect(url_for('login'))
+
+    return render_template('login.html')
+
 @app.route('/submit_turn', methods=['POST'])
+@login_required # Protect this route
 def submit_turn():
     game_instance = get_or_create_game()
     orders_json_str = request.form.get('orders_json')
@@ -903,7 +991,7 @@ def submit_turn():
         flash("Error: Could not decode orders JSON.")
         return redirect(url_for('display_game'))
 
-    results_messages = game_instance.process_turn(raw_orders_list)
+    results_messages = game_instance.process_turn(current_user.id, raw_orders_list) # Pass current_user.id
 
     for msg in results_messages:
         flash(msg) # Flash individual detailed messages
@@ -914,6 +1002,13 @@ def submit_turn():
          flash("No orders were submitted in the turn plan.")
 
     return redirect(url_for('display_game'))
+
+@app.route('/logout')
+@login_required # Ensures only logged-in users can access logout
+def logout():
+    logout_user()
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('login')) # Or url_for('hello_world') or another public page
 
 
 if __name__ == '__main__':

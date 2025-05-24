@@ -1,17 +1,31 @@
 <html lang="">
 <head><title>StarWeb Game</title></head>
 <body>
+    <nav>
+        {% if current_user.is_authenticated %}
+            <span>Logged in as: <strong>{{ current_user.username }}</strong></span> | 
+            <a href="{{ url_for('logout') }}">Logout</a>
+        {% else %}
+            <a href="{{ url_for('login') }}">Login</a> | 
+            <a href="{{ url_for('register') }}">Register</a>
+        {% endif %}
+    </nav>
+    <hr>
+
     <h1>StarWeb Game</h1>
 
-    {% with messages = get_flashed_messages() %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
-        <ul class=flashes style="color: red; list-style-type: none; padding: 0;">
-        {% for message in messages %}
-          <li>{{ message }}</li>
+        <ul class="flashes">
+        {% for category, message in messages %}
+          <li class="{{ category }}">{{ message }}</li>
         {% endfor %}
         </ul>
       {% endif %}
     {% endwith %}
+
+    <!-- Ensure current_user is available for the game display logic if needed, -->
+    <!-- or protect parts of this page with @login_required in the route -->
 
     <h2>Worlds</h2>
     <table border="1">
