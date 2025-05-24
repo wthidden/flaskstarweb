@@ -1,31 +1,116 @@
 <html lang="">
-<head><title>Game</title></head>
+<head><title>StarWeb Game</title></head>
 <body>
-<h1>Game</h1>
-<table>
-    {% for world in game.worlds %}
-        <td> id {{ world.id }}</td>
-        <td> name {{ world.name }}</td>
-        <td> owner {{ world.owner }}</td>
-        <td> connections</td>
-        <table>
-        {% for connection in world.connections %}
-            <tr>
-                <td> {{ connection.id }} </td>
-                <td> {{ connection.name }} </td>
-                <td> {{ connection.owner }} </td>
-            </tr>
+    <h1>StarWeb Game</h1>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul class=flashes style="color: red; list-style-type: none; padding: 0;">
+        {% for message in messages %}
+          <li>{{ message }}</li>
         {% endfor %}
-        <td>{{ world.iships }}</td>
-        <td>{{ world.pships }}</td>
-        <td>{{ world.population }}</td>
-        <td>{{ world.max_population }}</td>
-        <td>{{ world.industry }}</td>
-        <td>{{ world.mines }}</td>
-        <td>{{ world.stockpile }}</td>
-        <td> artifacts {{ world.artifacts }}</td>
-        </tr>
-    {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <h2>Worlds</h2>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Owner</th>
+                <th>Connections (ID, Name, Owner)</th>
+                <th>I-Ships</th>
+                <th>P-Ships</th>
+                <th>Population</th>
+                <th>Max Pop</th>
+                <th>Industry</th>
+                <th>Mines</th>
+                <th>Stockpile</th>
+                <th>Artifacts</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for world in game.worlds %}
+            <tr>
+                <td>{{ world.id }}</td>
+                <td>{{ world.name }}</td>
+                <td>{{ world.owner if world.owner else 'Unowned' }}</td>
+                <td>
+                    <ul>
+                    {% for connection in world.connections %}
+                        <li>{{ connection.id }} - {{ connection.name }} ({{ connection.owner if connection.owner else 'Unowned' }})</li>
+                    {% else %}
+                        <li>No connections</li>
+                    {% endfor %}
+                    </ul>
+                </td>
+                <td>{{ world.iships }}</td>
+                <td>{{ world.pships }}</td>
+                <td>{{ world.population }}</td>
+                <td>{{ world.max_population }}</td>
+                <td>{{ world.industry }}</td>
+                <td>{{ world.mines }}</td>
+                <td>{{ world.stockpile }}</td>
+                <td>{{ world.artifacts if world.artifacts else 'None' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
     </table>
+
+    <h2>Fleets</h2>
+    {% if game.fleets %}
+    <table border="1">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Owner</th>
+                <th>Location</th>
+                <th>Ships</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for fleet in game.fleets %}
+            <tr>
+                <td>{{ fleet.id }}</td>
+                <td>{{ fleet.name }}</td>
+                <td>{{ fleet.owner if fleet.owner else 'N/A' }}</td>
+                <td>
+                    {% if fleet.location %}
+                        {{ fleet.location.name }} (ID: {{ fleet.location.id }})
+                    {% else %}
+                        In Deep Space / No Location
+                    {% endif %}
+                </td>
+                <td>{{ fleet.ships }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No fleets in the game.</p>
+    {% endif %}
+
+    <h2>Move Fleet</h2>
+    <form action="{{ url_for('move_fleet') }}" method="post">
+        <div>
+            <label for="fleet_id">Fleet ID to Move:</label>
+            <input type="text" id="fleet_id" name="fleet_id" required>
+        </div>
+        <div>
+            <label for="world1_id">Destination World 1 ID:</label>
+            <input type="text" id="world1_id" name="world1_id" required>
+        </div>
+        <div>
+            <label for="world2_id">Destination World 2 ID (Optional):</label>
+            <input type="text" id="world2_id" name="world2_id">
+        </div>
+        <div>
+            <button type="submit">Move Fleet</button>
+        </div>
+    </form>
+
 </body>
 </html>

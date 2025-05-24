@@ -1,8 +1,11 @@
 import random
 
-from flask import Flask, render_template
+from flask import Flask, render_template, request, redirect, url_for, flash
 
 app = Flask(__name__)
+app.secret_key = 'your_secret_key'  # Needed for flash messages
+
+game = None  # Global game instance
 
 character_types = {"Empire Builder", "Merchant", "Pirate", "Artifact Collector", "Berserker"}
 
@@ -300,8 +303,80 @@ class Game:
     def BuildCommand(self):
         print("Build")
 
-    def MoveCommand(self):
-        print("Move")
+    def MoveCommand(self, fleet_id, target_world_ids):
+        # Retrieve the fleet object
+        fleet_to_move = next((f for f in self.fleets if f.id == fleet_id), None)
+
+        if not fleet_to_move:
+            print(f"Error: Fleet with ID {fleet_id} not found.")
+            return False
+
+        if fleet_to_move.ships <= 0:
+            print(f"Error: Fleet {fleet_to_move.name} has no ships and cannot move.")
+            return False
+
+        if len(target_world_ids) > 2:
+            print("Error: Fleet can move at most 2 segments (current -> world1 -> world2).")
+            return False
+
+        current_location = fleet_to_move.location
+        path = [current_location] + target_world_ids
+
+        # Validate path
+        for i in range(len(path) - 1):
+            world1 = path[i]
+            world2 = path[i+1]
+
+            # Ensure world1 and world2 are actual World objects if IDs were passed
+            if not isinstance(world1, World):
+                world1_obj = next((w for w in self.worlds if w.id == world1), None)
+                if not world1_obj:
+                    print(f"Error: World with ID {world1} not found in path.")
+                    return False
+                world1 = world1_obj
+            
+            if not isinstance(world2, World):
+                world2_obj = next((w for w in self.worlds if w.id == world2), None)
+                if not world2_obj:
+                    print(f"Error: World with ID {world2} not found in path.")
+                    return False
+                world2 = world2_obj
+            
+            # Check connection
+            if world2 not in world1.connections and world1 not in world2.connections: # Assuming connections are two-way
+                print(f"Error: World {world1.name} is not connected to {world2.name}.")
+                return False
+        
+        # Movement Logic
+        final_destination_world_id = target_world_ids[-1]
+        final_destination_world = next((w for w in self.worlds if w.id == final_destination_world_id), None)
+        if isinstance(target_world_ids[-1], World): # if it's already an object
+            final_destination_world = target_world_ids[-1]
+
+
+        if not final_destination_world:
+            # This should ideally be caught by path validation earlier if IDs are used
+            print(f"Error: Final destination world {final_destination_world_id} not found.")
+            return False
+
+        for i in range(len(target_world_ids)):
+            intermediate_world_id = target_world_ids[i]
+            intermediate_world = next((w for w in self.worlds if w.id == intermediate_world_id), None)
+            if isinstance(target_world_ids[i], World): # if it's already an object
+                intermediate_world = target_world_ids[i]
+
+            if not intermediate_world:
+                 print(f"Error: Intermediate world {intermediate_world_id} not found during movement.")
+                 return False # Should not happen if path validation is correct
+
+            if i < len(target_world_ids) - 1:
+                # This is an intermediate world
+                # TODO: Implement logic for hostile fleets at this intermediate world to fire upon the moving fleet.
+                print(f"Fleet {fleet_to_move.name} passing through {intermediate_world.name}...") # Optional: for tracing
+            
+        fleet_to_move.location = final_destination_world
+        print(f"Fleet {fleet_to_move.name} moved to {final_destination_world.name}.")
+        return True
 
     def AttackCommand(self):
         print("Attack")
@@ -374,8 +449,19 @@ def create_game():
     worlds = create_worlds()
     connect_worlds(worlds)
     fleets = create_fleets()
+    # Initialize fleets with some ships and a starting location for testing
+    if worlds: # Ensure worlds exist
+        for i, fleet in enumerate(fleets):
+            fleet.ships = random.randint(5, 20) # Give some ships
+            fleet.location = worlds[i % len(worlds)] # Assign a starting world
+            fleet.owner = "Player 1" # Assign an owner for display
     return Game(worlds, fleets, [])
 
+def get_or_create_game():
+    global game
+    if game is None:
+        game = create_game()
+    return game
 
 @app.route('/')
 def hello_world():  # put application's code here
@@ -384,8 +470,75 @@ def hello_world():  # put application's code here
 
 @app.route('/game')
 def display_game():
-    game = create_game()
-    return render_template('game.html', game=game)
+    game_instance = get_or_create_game()
+    return render_template('game.html', game=game_instance)
+
+@app.route('/move_fleet', methods=['POST'])
+def move_fleet():
+    game_instance = get_or_create_game()
+    fleet_id_str = request.form.get('fleet_id')
+    world1_id_str = request.form.get('world1_id')
+    world2_id_str = request.form.get('world2_id')
+
+    if not fleet_id_str or not world1_id_str:
+        flash("Error: Fleet ID and at least the first destination World ID are required.")
+        return redirect(url_for('display_game'))
+
+    try:
+        fleet_id = int(fleet_id_str)
+    except ValueError:
+        flash(f"Error: Invalid Fleet ID '{fleet_id_str}'. Must be a number.")
+        return redirect(url_for('display_game'))
+
+    target_worlds_path = []
+    world_ids_str = [world1_id_str, world2_id_str]
+
+    for world_id_s in world_ids_str:
+        if world_id_s:  # If the world ID string is not empty
+            try:
+                world_id = int(world_id_s)
+                world = next((w for w in game_instance.worlds if w.id == world_id), None)
+                if world:
+                    target_worlds_path.append(world)
+                else:
+                    flash(f"Error: World with ID {world_id} not found.")
+                    return redirect(url_for('display_game'))
+            except ValueError:
+                flash(f"Error: Invalid World ID '{world_id_s}'. Must be a number.")
+                return redirect(url_for('display_game'))
+    
+    if not target_worlds_path: # Should be caught by earlier check for world1_id_str but as a safeguard
+        flash("Error: At least one valid destination world must be specified.")
+        return redirect(url_for('display_game'))
+
+    # Call MoveCommand
+    # We need to ensure the fleet's current location is a World object if it's an ID
+    # However, MoveCommand already handles resolving world IDs to objects internally.
+    # The target_worlds_path is already a list of World objects.
+    
+    # First, ensure the fleet itself exists. MoveCommand does this, but we can give a better flash.
+    fleet_to_move = next((f for f in game_instance.fleets if f.id == fleet_id), None)
+    if not fleet_to_move:
+        flash(f"Error: Fleet with ID {fleet_id} not found.")
+        return redirect(url_for('display_game'))
+
+    # If the fleet's current location is not set (e.g., newly created fleet)
+    # MoveCommand expects fleet.location to be a World object or a resolvable ID
+    # Our create_fleets assigns a world object now.
+    if fleet_to_move.location is None:
+        flash(f"Error: Fleet {fleet_to_move.name} (ID: {fleet_id}) has an unassigned starting location and cannot move.")
+        return redirect(url_for('display_game'))
+
+
+    success = game_instance.MoveCommand(fleet_id=fleet_id, target_world_ids=target_worlds_path)
+
+    if success:
+        flash(f"Fleet {fleet_id} move command processed. Check console/fleet list for status.")
+    else:
+        # MoveCommand prints its own errors, but we can add a generic flash message.
+        flash(f"Fleet {fleet_id} move command failed. See console for details.")
+            
+    return redirect(url_for('display_game'))
 
 
 if __name__ == '__main__':
