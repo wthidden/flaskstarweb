@@ -36,11 +36,11 @@
             <tr>
                 <td>{{ world.id }}</td>
                 <td>{{ world.name }}</td>
-                <td>{{ world.owner if world.owner else 'Unowned' }}</td>
+                <td>{{ world.owner.name if world.owner else 'Unowned' }}</td>
                 <td>
                     <ul>
                     {% for connection in world.connections %}
-                        <li>{{ connection.id }} - {{ connection.name }} ({{ connection.owner if connection.owner else 'Unowned' }})</li>
+                        <li>{{ connection.id }} - {{ connection.name }} ({{ connection.owner.name if connection.owner else 'Unowned' }})</li>
                     {% else %}
                         <li>No connections</li>
                     {% endfor %}
@@ -76,7 +76,7 @@
             <tr>
                 <td>{{ fleet.id }}</td>
                 <td>{{ fleet.name }}</td>
-                <td>{{ fleet.owner if fleet.owner else 'N/A' }}</td>
+                <td>{{ fleet.owner.name if fleet.owner else 'N/A' }}</td>
                 <td>
                     {% if fleet.location %}
                         {{ fleet.location.name }} (ID: {{ fleet.location.id }})
@@ -111,6 +111,248 @@
             <button type="submit">Move Fleet</button>
         </div>
     </form>
+
+    <hr>
+
+    <h2>Plan Your Turn</h2>
+    <form id="turnForm" method="POST" action="{{ url_for('submit_turn') }}">
+        <input type="hidden" name="orders_json" id="ordersJsonInput">
+
+        <div>
+            <label for="orderType">Select Order Type:</label>
+            <select id="orderType">
+                <option value="MOVE">Move Fleet</option>
+                <option value="TRANSFER">Transfer Ships</option>
+                <option value="LOAD_CARGO">Load Cargo</option>
+                <option value="UNLOAD_CARGO">Unload Cargo</option>
+            </select>
+        </div>
+
+        <!-- Order Specific Inputs -->
+        <div id="moveInputs" class="order-inputs">
+            <h4>Move Fleet</h4>
+            <label for="moveFleetId">Fleet ID to Move:</label>
+            <input type="number" id="moveFleetId" placeholder="Fleet ID"><br>
+            <label for="moveWorld1Id">Destination World ID 1:</label>
+            <input type="number" id="moveWorld1Id" placeholder="World ID 1"><br>
+            <label for="moveWorld2Id">Destination World ID 2 (optional):</label>
+            <input type="number" id="moveWorld2Id" placeholder="World ID 2"><br>
+        </div>
+
+        <div id="transferInputs" class="order-inputs" style="display: none;">
+            <h4>Transfer Ships</h4>
+            <label for="transferShipCount">Ships to Transfer:</label>
+            <input type="number" id="transferShipCount" placeholder="Amount"><br>
+            <label for="transferFromEntityType">From Entity Type:</label>
+            <select id="transferFromEntityType">
+                <option value="FLEET">Fleet</option>
+                <option value="ISHIP">ISHIPs (at World)</option>
+                <option value="PSHIP">PSHIPs (at World)</option>
+            </select><br>
+            <label for="transferFromId">From ID (Fleet or World):</label>
+            <input type="number" id="transferFromId" placeholder="Source ID"><br>
+            <label for="transferToEntityType">To Entity Type:</label>
+            <select id="transferToEntityType">
+                <option value="FLEET">Fleet</option>
+                <option value="ISHIP">ISHIPs (at World)</option>
+                <option value="PSHIP">PSHIPs (at World)</option>
+            </select><br>
+            <label for="transferToId">To ID (Fleet or World):</label>
+            <input type="number" id="transferToId" placeholder="Target ID"><br>
+        </div>
+
+        <div id="loadInputs" class="order-inputs" style="display: none;">
+            <h4>Load Cargo</h4>
+            <label for="loadFleetId">Fleet ID to Load:</label>
+            <input type="number" id="loadFleetId" placeholder="Fleet ID"><br>
+            <label for="loadWorldId">World ID (Fleet's Location):</label>
+            <input type="number" id="loadWorldId" placeholder="World ID"><br>
+            <label for="loadMetalAmount">Metal Amount (-1 for all):</label>
+            <input type="number" id="loadMetalAmount" value="-1"><br>
+        </div>
+
+        <div id="unloadInputs" class="order-inputs" style="display: none;">
+            <h4>Unload Cargo</h4>
+            <label for="unloadFleetId">Fleet ID to Unload:</label>
+            <input type="number" id="unloadFleetId" placeholder="Fleet ID"><br>
+            <label for="unloadWorldId">World ID (Fleet's Location):</label>
+            <input type="number" id="unloadWorldId" placeholder="World ID"><br>
+            <label for="unloadMetalAmount">Metal Amount (-1 for all):</label>
+            <input type="number" id="unloadMetalAmount" value="-1"><br>
+            <label for="unloadAsCG">Unload as Consumer Goods?</label>
+            <input type="checkbox" id="unloadAsCG"><br>
+        </div>
+
+        <button type="button" id="addOrderBtn" style="margin-top: 10px;">Add Order to Turn</button>
+
+        <h3>Queued Orders for This Turn:</h3>
+        <div id="queuedOrdersList" style="border: 1px solid #ccc; padding: 10px; min-height: 50px; background-color: #f9f9f9;">
+            <!-- Orders will be listed here -->
+        </div>
+
+        <button type="submit" id="submitTurnBtn" style="margin-top: 15px;">Submit Turn</button>
+    </form>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const orderTypeSelect = document.getElementById('orderType');
+            const addOrderBtn = document.getElementById('addOrderBtn');
+            const queuedOrdersListDiv = document.getElementById('queuedOrdersList');
+            const turnForm = document.getElementById('turnForm');
+            const ordersJsonInput = document.getElementById('ordersJsonInput');
+
+            const inputGroups = {
+                'MOVE': document.getElementById('moveInputs'),
+                'TRANSFER': document.getElementById('transferInputs'),
+                'LOAD_CARGO': document.getElementById('loadInputs'),
+                'UNLOAD_CARGO': document.getElementById('unloadInputs')
+            };
+
+            let queuedOrders = [];
+
+            function updateOrderFormInputs() {
+                const selectedType = orderTypeSelect.value;
+                for (const type in inputGroups) {
+                    inputGroups[type].style.display = 'none';
+                }
+                if (inputGroups[selectedType]) {
+                    inputGroups[selectedType].style.display = 'block';
+                }
+            }
+
+            function renderQueuedOrders() {
+                queuedOrdersListDiv.innerHTML = ''; // Clear current list
+                if (queuedOrders.length === 0) {
+                    queuedOrdersListDiv.innerHTML = '<p>No orders queued yet.</p>';
+                }
+                queuedOrders.forEach((order, index) => {
+                    const orderDiv = document.createElement('div');
+                    orderDiv.style.marginBottom = '5px';
+                    orderDiv.style.padding = '5px';
+                    orderDiv.style.border = '1px solid #eee';
+                    
+                    let desc = `Order ${index + 1}: [${order.order_type}] `;
+                    switch(order.order_type) {
+                        case 'MOVE':
+                            desc += `Fleet ${order.fleet_id} to World ${order.target_world_ids[0]}`;
+                            if (order.target_world_ids.length > 1 && order.target_world_ids[1]) {
+                                desc += ` then to World ${order.target_world_ids[1]}`;
+                            }
+                            break;
+                        case 'TRANSFER':
+                            desc += `${order.ship_count} ships from ${order.from_entity_type} ID ${order.from_id} to ${order.to_entity_type} ID ${order.to_id}`;
+                            break;
+                        case 'LOAD_CARGO':
+                            desc += `Fleet ${order.fleet_id} load ${order.metal_amount === -1 ? 'all' : order.metal_amount} metal from World ${order.world_id}`;
+                            break;
+                        case 'UNLOAD_CARGO':
+                            desc += `Fleet ${order.fleet_id} unload ${order.metal_amount === -1 ? 'all' : order.metal_amount} metal at World ${order.world_id}`;
+                            if (order.as_consumer_goods) desc += ' as Consumer Goods';
+                            break;
+                        default:
+                            desc += 'Unknown order type';
+                    }
+                    orderDiv.textContent = desc;
+
+                    const removeBtn = document.createElement('button');
+                    removeBtn.textContent = 'Remove';
+                    removeBtn.type = 'button';
+                    removeBtn.style.marginLeft = '10px';
+                    removeBtn.dataset.index = index;
+                    removeBtn.addEventListener('click', function() {
+                        queuedOrders.splice(parseInt(this.dataset.index), 1);
+                        renderQueuedOrders();
+                    });
+                    orderDiv.appendChild(removeBtn);
+                    queuedOrdersListDiv.appendChild(orderDiv);
+                });
+            }
+
+            addOrderBtn.addEventListener('click', function () {
+                const selectedType = orderTypeSelect.value;
+                let newOrder = { order_type: selectedType };
+                let valid = true;
+
+                switch (selectedType) {
+                    case 'MOVE':
+                        const moveFleetId = parseInt(document.getElementById('moveFleetId').value);
+                        const moveWorld1Id = parseInt(document.getElementById('moveWorld1Id').value);
+                        const moveWorld2IdStr = document.getElementById('moveWorld2Id').value;
+                        const moveWorld2Id = moveWorld2IdStr ? parseInt(moveWorld2IdStr) : null;
+                        
+                        if (isNaN(moveFleetId) || isNaN(moveWorld1Id)) { valid = false; alert("Fleet ID and World 1 ID are required for Move order."); break;}
+
+                        newOrder.fleet_id = moveFleetId;
+                        newOrder.target_world_ids = [moveWorld1Id];
+                        if (moveWorld2Id !== null && !isNaN(moveWorld2Id)) {
+                            newOrder.target_world_ids.push(moveWorld2Id);
+                        }
+                        break;
+                    case 'TRANSFER':
+                        const shipCount = parseInt(document.getElementById('transferShipCount').value);
+                        const fromType = document.getElementById('transferFromEntityType').value;
+                        const fromId = parseInt(document.getElementById('transferFromId').value);
+                        const toType = document.getElementById('transferToEntityType').value;
+                        const toId = parseInt(document.getElementById('transferToId').value);
+
+                        if (isNaN(shipCount) || isNaN(fromId) || isNaN(toId) || shipCount <=0) { valid = false; alert("Valid Ship Count, From ID, and To ID are required for Transfer."); break; }
+                        
+                        newOrder.ship_count = shipCount;
+                        newOrder.from_entity_type = fromType;
+                        newOrder.from_id = fromId;
+                        newOrder.to_entity_type = toType;
+                        newOrder.to_id = toId;
+                        break;
+                    case 'LOAD_CARGO':
+                        const loadFleetId = parseInt(document.getElementById('loadFleetId').value);
+                        const loadWorldId = parseInt(document.getElementById('loadWorldId').value);
+                        const loadMetalAmount = parseInt(document.getElementById('loadMetalAmount').value);
+                        if (isNaN(loadFleetId) || isNaN(loadWorldId) || isNaN(loadMetalAmount)) { valid = false; alert("Valid Fleet ID, World ID, and Metal Amount are required for Load Cargo."); break; }
+
+                        newOrder.fleet_id = loadFleetId;
+                        newOrder.world_id = loadWorldId;
+                        newOrder.metal_amount = loadMetalAmount;
+                        break;
+                    case 'UNLOAD_CARGO':
+                        const unloadFleetId = parseInt(document.getElementById('unloadFleetId').value);
+                        const unloadWorldId = parseInt(document.getElementById('unloadWorldId').value);
+                        const unloadMetalAmount = parseInt(document.getElementById('unloadMetalAmount').value);
+                        if (isNaN(unloadFleetId) || isNaN(unloadWorldId) || isNaN(unloadMetalAmount)) { valid = false; alert("Valid Fleet ID, World ID, and Metal Amount are required for Unload Cargo."); break; }
+                        
+                        newOrder.fleet_id = unloadFleetId;
+                        newOrder.world_id = unloadWorldId;
+                        newOrder.metal_amount = unloadMetalAmount;
+                        newOrder.as_consumer_goods = document.getElementById('unloadAsCG').checked;
+                        break;
+                    default:
+                        valid = false;
+                        alert('Unknown order type selected.');
+                        break;
+                }
+
+                if (valid) {
+                    queuedOrders.push(newOrder);
+                    renderQueuedOrders();
+                    // Optionally clear inputs here
+                }
+            });
+
+            turnForm.addEventListener('submit', function (event) {
+                // No longer preventing default submission as action is now set
+                ordersJsonInput.value = JSON.stringify(queuedOrders);
+                // Consider clearing queuedOrders array from JS if desired for immediate UI feedback,
+                // though page reload on redirect will also clear it.
+                // For example: queuedOrders = []; renderQueuedOrders();
+                // However, this might be too fast if submission fails and user wants to see their orders.
+                // Relying on page reload is simpler for now.
+            });
+
+            // Initial setup
+            updateOrderFormInputs();
+            renderQueuedOrders(); // To show "No orders queued yet."
+            orderTypeSelect.addEventListener('change', updateOrderFormInputs);
+        });
+    </script>
 
 </body>
 </html>
