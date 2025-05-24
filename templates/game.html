@@ -54,14 +54,14 @@
     <!-- Ensure current_user is available for the game display logic if needed, -->
     <!-- or protect parts of this page with @login_required in the route -->
 
-    <h2>Full Galaxy Worlds List</h2>
+    <h2>{% if is_admin_view %}Full Galaxy Worlds List (Admin View){% else %}Known Worlds{% endif %}</h2>
     <table border="1">
         <thead>
             <tr>
                 <th>ID</th>
                 <th>Name</th>
                 <th>Owner</th>
-                <th>Connections (ID, Name, Owner)</th>
+                <th>Connections</th>
                 <th>I-Ships</th>
                 <th>P-Ships</th>
                 <th>Population</th>
@@ -73,35 +73,39 @@
             </tr>
         </thead>
         <tbody>
-            {% for world in game.worlds %}
-            <tr>
-                <td>{{ world.id }}</td>
-                <td>{{ world.name }}</td>
-                <td>{{ world.owner.name if world.owner else 'Unowned' }}</td>
-                <td>
-                    <ul>
-                    {% for connection in world.connections %}
-                        <li>{{ connection.id }} - {{ connection.name }} ({{ connection.owner.name if connection.owner else 'Unowned' }})</li>
-                    {% else %}
-                        <li>No connections</li>
-                    {% endfor %}
-                    </ul>
-                </td>
-                <td>{{ world.iships }}</td>
-                <td>{{ world.pships }}</td>
-                <td>{{ world.population }}</td>
-                <td>{{ world.max_population }}</td>
-                <td>{{ world.industry }}</td>
-                <td>{{ world.mines }}</td>
-                <td>{{ world.stockpile }}</td>
-                <td>{{ world.artifacts if world.artifacts else 'None' }}</td>
-            </tr>
+            {% for world in worlds_to_display %}  <!-- Iterate over worlds_to_display -->
+                <tr>
+                    <td>{{ world.id }}</td>
+                    <td>{{ world.name }}</td>
+                    <td>{{ world.owner.name if world.owner else 'Unowned' }}</td>
+                    <td>
+                        {% for conn in world.connections %}
+                            {{ conn.id }}{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </td>
+                    <td>{{ world.iships }}</td>
+                    <td>{{ world.pships }}</td>
+                    <td>{{ world.population }}</td>
+                    <td>{{ world.max_population }}</td>
+                    <td>{{ world.industry }}</td>
+                    <td>{{ world.mines }}</td>
+                    <td>{{ world.stockpile }}</td>
+                    <td>
+                        {% for artifact in world.artifacts %}
+                            {{ artifact.name }} ({{artifact.id}}){% if not loop.last %}, <br>{% endif %}
+                        {% else %}
+                            None
+                        {% endfor %}
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="12">No worlds to display.</td></tr>
             {% endfor %}
         </tbody>
     </table>
 
-    <h2>Full Galaxy Fleets List</h2>
-    {% if game.fleets %}
+    <h2>{% if is_admin_view %}Full Galaxy Fleets List (Admin View){% else %}Known Fleets{% endif %}</h2>
+    {% if fleets_to_display %} <!-- Check if fleets_to_display has items -->
     <table border="1">
         <thead>
             <tr>
@@ -111,24 +115,28 @@
                 <th>Location</th>
                 <th>Ships</th>
                 <th>Cargo</th>
+                <th>Artifacts</th>
             </tr>
         </thead>
         <tbody>
-            {% for fleet in game.fleets %}
-            <tr>
-                <td>{{ fleet.id }}</td>
-                <td>{{ fleet.name }}</td>
-                <td>{{ fleet.owner.name if fleet.owner else 'Unowned' }}</td>
-                <td>
-                    {% if fleet.location %}
-                        {{ fleet.location.name }} (ID: {{ fleet.location.id if fleet.location else 'N/A' }})
-                    {% else %}
-                        In Deep Space / No Location
-                    {% endif %}
-                </td>
-                <td>{{ fleet.ships }}</td>
-                <td>{{ fleet.cargo }}</td>
-            </tr>
+            {% for fleet in fleets_to_display %} <!-- Iterate over fleets_to_display -->
+                <tr>
+                    <td>{{ fleet.id }}</td>
+                    <td>{{ fleet.name }}</td>
+                    <td>{{ fleet.owner.name if fleet.owner else 'Unowned' }}</td>
+                    <td>{{ fleet.location.name if fleet.location else 'N/A' }} (ID: {{ fleet.location.id if fleet.location else 'N/A' }})</td>
+                    <td>{{ fleet.ships }}</td>
+                    <td>{{ fleet.cargo }}</td>
+                    <td>
+                        {% for artifact in fleet.artifacts %}
+                            {{ artifact.name }} ({{artifact.id}}){% if not loop.last %}, <br>{% endif %}
+                        {% else %}
+                            None
+                        {% endfor %}
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="7">No fleets to display.</td></tr>
             {% endfor %}
         </tbody>
     </table>

@@ -240,9 +240,10 @@ for name in SPECIAL_ARTIFACT_NAMES:
 
 # User model for Flask-Login
 class User(UserMixin):
-    def __init__(self, username, password):
+    def __init__(self, username, password, is_admin: bool = False): # Added is_admin
         self.id = username # For Flask-Login, id should be a string
         self.username = username
+        self.is_admin = is_admin # New attribute
         self.password_hash = generate_password_hash(password)
 
     def set_password(self, password):
@@ -535,6 +536,18 @@ class Game:
         self.worlds = worlds
         self.fleets = fleets
         self.players = players
+        self.turn_events: dict[str, list[str]] = {} # Key: player.user_id, Value: list of event message strings
+
+    def add_turn_event(self, user_id_to_notify: str, message: str):
+        if user_id_to_notify not in self.turn_events:
+            self.turn_events[user_id_to_notify] = []
+        self.turn_events[user_id_to_notify].append(message)
+
+    def get_and_clear_turn_events(self, user_id: str) -> list[str]:
+        events = self.turn_events.get(user_id, [])
+        if user_id in self.turn_events:
+            self.turn_events[user_id] = [] # Clear after retrieval
+        return events
 
     def BuildCommand(self):
         print("Build")
@@ -593,14 +606,25 @@ class Game:
 
         # Simulate passing through intermediate worlds (for future hostile fleet interactions)
         for i in range(len(path_world_objects)):
-            intermediate_world = path_world_objects[i]
-            if intermediate_world == final_destination_world and i == len(path_world_objects) -1 :
-                # This is the final destination, not an intermediate pass-through
-                pass
-            else:
-                # TODO: Implement logic for hostile fleets at this intermediate world to fire upon the moving fleet.
-                # print(f"Fleet {fleet_to_move.name} passing through {intermediate_world.name}...") # Optional: for tracing
-                pass
+            intermediate_world_object = path_world_objects[i]
+            
+            # Check if this is an intermediate stop (not the final destination of this move order)
+            is_intermediate_stop = (intermediate_world_object != final_destination_world)
+            
+            if is_intermediate_stop:
+                # This world is being passed through.
+                # Log event if owned by a different player.
+                world_owner = intermediate_world_object.owner
+                moving_fleet_owner = fleet_to_move.owner
+
+                if world_owner and world_owner != moving_fleet_owner and world_owner.user_id:
+                    event_message = (
+                        f"ALERT: Your world {intermediate_world_object.name} (ID: {intermediate_world_object.id}) "
+                        f"was passed through by Fleet ID: {fleet_to_move.id} "
+                        f"(Name: {fleet_to_move.name}, Owner: {moving_fleet_owner.name if moving_fleet_owner else 'Unowned'})."
+                    )
+                    self.add_turn_event(world_owner.user_id, event_message)
+                    print(f"Event for {world_owner.user_id}: {event_message}") # Server log for event
             
         fleet_to_move.location = final_destination_world
         msg = f"Fleet {fleet_to_move.name} (ID: {order.fleet_id}) moved to {final_destination_world.name} (ID: {final_destination_world.id})."
@@ -681,6 +705,58 @@ class Game:
     def get_world(self, world_id: int) -> World | None:
         """Retrieves a world by its ID."""
         return next((w for w in self.worlds if w.id == world_id), None)
+
+    def get_visible_worlds_for_player(self, current_player: Player) -> list[World]:
+        if not current_player: # Or if current_player is an admin with no game entity
+            return [] # Or handle as appropriate for non-participating users
+
+        visible_worlds = set() # Use a set to avoid duplicates
+
+        # 1. Worlds owned by the player
+        for world in self.worlds: # Iterate all worlds in the game
+            if world.owner == current_player: # Direct object comparison
+                visible_worlds.add(world)
+
+        # 2. Worlds where any of the player's fleets are located
+        for fleet in self.fleets: # Iterate all fleets in the game
+            if fleet.owner == current_player and fleet.location:
+                visible_worlds.add(fleet.location)
+       
+        return list(visible_worlds)
+
+    def get_visible_fleets_for_player(self, current_player: Player) -> list[Fleet]:
+        if not current_player:
+            return []
+
+        visible_fleets_set = set() # Use a set to avoid duplicates
+       
+        # Prepare sets of world IDs relevant to the current player for efficient lookup
+        player_owned_world_ids = {world.id for world in self.worlds if world.owner == current_player}
+        
+        player_fleet_location_ids = set()
+        for p_fleet in self.fleets: # Iterate all fleets to find current player's fleet locations
+            if p_fleet.owner == current_player and p_fleet.location:
+                player_fleet_location_ids.add(p_fleet.location.id)
+
+        for fleet_to_check in self.fleets: # Iterate all fleets in the game
+            # Rule 0: Player always sees their own fleets
+            if fleet_to_check.owner == current_player:
+                visible_fleets_set.add(fleet_to_check)
+                continue
+
+            # Rules for seeing other players' fleets:
+            if fleet_to_check.location: # Fleet must have a location
+                # Rule 1: Player A owns the world where Player B's fleet is located
+                if fleet_to_check.location.id in player_owned_world_ids:
+                    visible_fleets_set.add(fleet_to_check)
+                    continue
+               
+                # Rule 3: Player A's fleet is at the same world as Player B's fleet
+                if fleet_to_check.location.id in player_fleet_location_ids:
+                    visible_fleets_set.add(fleet_to_check)
+                    continue
+       
+        return list(visible_fleets_set)
 
     def execute_transfer_order(self, order: TransferOrder) -> tuple[bool, str]:
         """Executes a TransferOrder, moving ships between entities."""
@@ -1065,11 +1141,43 @@ def hello_world():  # put application's code here
 def display_game():
     game_instance = get_or_create_game()
     current_player_ingame = None
-    if current_user.is_authenticated: # current_user is from Flask-Login
-        # Find the in-game Player object that corresponds to the logged-in User
+    player_turn_events = [] # Initialize here
+
+    if current_user.is_authenticated: # current_user is from flask_login
+        # Find the in-game Player object linked to the logged-in User
         current_player_ingame = next((p for p in game_instance.players if p.user_id == current_user.id), None)
-    
-    return render_template('game.html', game=game_instance, current_player_ingame=current_player_ingame)
+        # Get and clear events for the current logged-in user
+        player_turn_events = game_instance.get_and_clear_turn_events(current_user.id)
+
+
+    worlds_to_display = []
+    fleets_to_display = []
+    is_admin_view = False
+
+    if current_user.is_authenticated and current_user.is_admin:
+        worlds_to_display = game_instance.worlds
+        fleets_to_display = game_instance.fleets
+        is_admin_view = True
+        # flash("Displaying full galaxy view (Admin).", "info") # Already flashed by login or other actions
+    elif current_player_ingame: # Regular player who is set up in the game
+        worlds_to_display = game_instance.get_visible_worlds_for_player(current_player_ingame)
+        fleets_to_display = game_instance.get_visible_fleets_for_player(current_player_ingame)
+        # flash("Displaying your known galaxy view.", "info")
+    else:
+        # Logged in, but not an admin and not set up as a player in the game 
+        # (e.g., registered but game was reset, or admin who isn't playing)
+        # Or, if a user somehow gets here without being fully set up.
+        if current_user.is_authenticated: # Avoid flashing if not logged in at all (though @login_required should prevent this)
+            flash("You are logged in, but not currently an active player in this game. Displaying limited or no view.", "warning")
+        # worlds_to_display and fleets_to_display remain empty
+
+    return render_template('game.html', 
+                            game=game_instance, # Still pass for general game info if any needed
+                            current_player_ingame=current_player_ingame,
+                            worlds_to_display=worlds_to_display,
+                            fleets_to_display=fleets_to_display,
+                            is_admin_view=is_admin_view,
+                            player_turn_events=player_turn_events) # Pass events to template
 
 @app.route('/move_fleet', methods=['POST'])
 def move_fleet():
@@ -1143,52 +1251,75 @@ def register():
         username = request.form.get('username')
         password = request.form.get('password')
         confirm_password = request.form.get('confirm_password')
-        character_type = request.form.get('character_type')
+        # character_type is retrieved later, only if not admin
 
-
-        if not username or not password or not confirm_password or not character_type:
-            flash('All fields, including character type, are required!', 'danger')
+        if not username or not password or not confirm_password: # Character type not mandatory at this stage of validation
+            flash('Username, password, and password confirmation are required!', 'danger')
             return redirect(url_for('register'))
 
         if password != confirm_password:
             flash('Passwords do not match!', 'danger')
             return redirect(url_for('register'))
-        
-        if character_type not in character_types: # Validate against the global set
-            flash('Invalid character type selected!', 'danger')
-            return redirect(url_for('register'))
 
-        if username in users_db: # users_db is global
+        if username in users_db:
             flash('Username already exists. Please choose a different one.', 'warning')
             return redirect(url_for('register'))
 
-        # Create new Flask-Login User
-        new_user = User(username=username, password=password) 
-        users_db[username] = new_user 
+        is_admin_user = False
+        if username.lower() == "admin": # Temporary: specific username becomes admin
+            is_admin_user = True
+            flash("Admin user registration recognized.", "info")
+        
+        new_user = User(username=username, password=password, is_admin=is_admin_user)
+        users_db[username] = new_user
+        
+        game_instance = get_or_create_game() # Ensure game instance is available
+        ingame_player = None # Initialize
 
-        game_instance = get_or_create_game()
+        if not is_admin_user:
+            character_type = request.form.get('character_type')
+            if not character_type:
+                flash('Character type is required for players!', 'danger')
+                users_db.pop(username, None) # Clean up created User
+                return redirect(url_for('register'))
+            
+            if character_type not in character_types:
+                flash('Invalid character type selected!', 'danger')
+                users_db.pop(username, None) # Clean up created User
+                return redirect(url_for('register'))
 
-        # Create the in-game Player object
-        ingame_player = Player(name=new_user.username, 
-                               character_type=character_type, 
-                               user_id=new_user.id) # Link to User.id
-        game_instance.players.append(ingame_player)
+            # Check if this user_id (username) already has an in-game Player object.
+            # This check is more robust if a user account might exist without a player object yet.
+            existing_player_for_user = next((p for p in game_instance.players if p.user_id == new_user.id), None)
+            if existing_player_for_user:
+                flash(f'User {new_user.username} already has a player character in this game. Cannot create another.', 'warning')
+                # If user exists but player setup failed previously, this path might need review.
+                # For now, we assume this is an error state if reached.
+                # users_db.pop(username, None) # Might be too aggressive if user is just re-registering
+                return redirect(url_for('register'))
+            
+            ingame_player = Player(name=new_user.username,
+                                   character_type=character_type,
+                                   user_id=new_user.id)
+            game_instance.players.append(ingame_player)
 
-        # Assign homeworld and starting fleets
-        try:
-            assign_homeworld_to_player(ingame_player, game_instance)
-            assign_starting_fleets_to_player(ingame_player, game_instance)
-            flash(f'User {new_user.username} and Player {ingame_player.name} created as {character_type}. Homeworld and fleets assigned. Please login.', 'success')
-        except Exception as e:
-            flash(f'User {new_user.username} created, but error setting up player in game: {e}. Please contact admin.', 'danger')
-            # Potentially remove ingame_player from game_instance.players and new_user from users_db if setup fails critically
-            # For now, user exists, can try logging in, but might not have game entities.
-            # Or, delete the user: users_db.pop(username, None)
-            return redirect(url_for('register')) # Or a specific error page
+            try:
+                assign_homeworld_to_player(ingame_player, game_instance)
+                assign_starting_fleets_to_player(ingame_player, game_instance)
+                flash(f'Player {ingame_player.name} ({character_type}) created. Homeworld and fleets assigned. Please login.', 'success')
+            except Exception as e:
+                flash(f'User {new_user.username} created, but error setting up player in game: {e}. Please contact admin.', 'danger')
+                # Clean up: remove player from game and user from users_db
+                if ingame_player and ingame_player in game_instance.players:
+                    game_instance.players.remove(ingame_player)
+                users_db.pop(username, None)
+                return redirect(url_for('register'))
+        elif is_admin_user:
+            flash(f'Admin user {new_user.username} registered. No in-game player entity created. Please login.', 'info')
 
-        return redirect(url_for('login')) 
+        return redirect(url_for('login'))
 
-    return render_template('register.html', character_types=character_types) # Pass character_types to template
+    return render_template('register.html', character_types=character_types)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():

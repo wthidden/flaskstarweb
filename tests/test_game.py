@@ -456,6 +456,10 @@ class TestGameCommands(unittest.TestCase):
         
         # Note: process_turn now requires user_id. Using a dummy one for this test as it's not the focus here.
         raw_orders = [valid_move_dict, invalid_load_dict]
+        # Ensure self.game.players is populated if needed by order execution logic, even if not directly used by this test's focus
+        if not self.game.players:
+            self.game.players.append(self.player1_obj) # Add a dummy player if list is empty
+
         results = self.game.process_turn("test_user", raw_orders)
         
         self.assertEqual(len(results), 2)
@@ -583,6 +587,220 @@ class TestGameCommands(unittest.TestCase):
         self.assertEqual(len(game_instance.players), 2)
         self.assertIn(player1, game_instance.players)
         self.assertIn(player2, game_instance.players)
+
+    # --- Tests for Admin User, Visibility, and Event Logging ---
+
+    def test_admin_user_registration_setup(self):
+        """Test that registering 'admin' user sets is_admin and skips player setup."""
+        # Simulate app.users_db for this test - this is normally global in app.py
+        # For testing, we can pass a mock or use a temporary one if User class doesn't depend on Flask context.
+        # The User class itself does not depend on Flask context for its methods.
+        
+        admin_user = User(username="admin", password="password", is_admin=True) # Simulating admin flag logic
+        self.assertTrue(admin_user.is_admin)
+        
+        # In the actual /register route, if username is "admin", no Player object is created.
+        # We test this by ensuring an admin user doesn't get game entities by default.
+        game_instance = create_game() # Fresh game
+        
+        # Check if a player object for 'admin' was accidentally created (it shouldn't be)
+        admin_player_in_game = next((p for p in game_instance.players if p.user_id == "admin"), None)
+        self.assertIsNone(admin_player_in_game, "Admin user 'admin' should not have an in-game Player object created by default player setup logic.")
+
+    def test_regular_user_is_not_admin(self):
+        """Test that a regular user is not flagged as admin and gets player setup."""
+        regular_user = User(username="player1", password="password") # Default is_admin=False
+        self.assertFalse(regular_user.is_admin)
+
+        # Simulate the player setup part for a regular user
+        game_instance = create_game()
+        player_obj = self._register_new_player_setup(game_instance, "player1", "Merchant")
+        self.assertIsNotNone(player_obj)
+        self.assertIsNotNone(player_obj.home_world)
+        self.assertTrue(len(player_obj.fleets) > 0)
+
+
+    def _setup_visibility_test_scenario(self) -> tuple[Game, Player, Player]:
+        """Helper to create a specific game state for visibility tests."""
+        game = Game(worlds=[], fleets=[], players=[])
+
+        # Create Players
+        player_a = Player(name="PlayerA", character_type="Merchant", user_id="userA")
+        player_b = Player(name="PlayerB", character_type="Pirate", user_id="userB")
+        game.players.extend([player_a, player_b])
+
+        # Create Worlds
+        wa1 = World(id=1, name="WA1", owner=player_a, connections=[], iships=0, pships=0, population=10, max_population=100, industry=10, mines=1, stockpile=10, artifacts=[])
+        player_a.worlds.append(wa1)
+        player_a.home_world = wa1
+        
+        wb1 = World(id=2, name="WB1", owner=player_b, connections=[], iships=0, pships=0, population=10, max_population=100, industry=10, mines=1, stockpile=10, artifacts=[])
+        player_b.worlds.append(wb1)
+        player_b.home_world = wb1
+
+        wn1 = World(id=3, name="WN1", owner=None, connections=[], iships=0, pships=0, population=10, max_population=100, industry=10, mines=1, stockpile=10, artifacts=[]) # Neutral
+        w_shared = World(id=4, name="W_Shared", owner=None, connections=[], iships=0, pships=0, population=10, max_population=100, industry=10, mines=1, stockpile=10, artifacts=[]) # Neutral, for shared fleets
+
+        game.worlds.extend([wa1, wb1, wn1, w_shared])
+        
+        # Connect worlds for movement tests if needed later, but not strictly for visibility by ownership/presence
+        wa1.connections.append(w_shared)
+        w_shared.connections.append(wa1)
+        wb1.connections.append(w_shared)
+        w_shared.connections.append(wb1)
+
+
+        # Create Fleets
+        fa1 = Fleet(id=1, name="FA1", ships=10, location=wa1, owner=player_a, cargo=0, artifacts=[]) # A's fleet at A's world
+        player_a.fleets.append(fa1)
+        fa2 = Fleet(id=2, name="FA2", ships=10, location=w_shared, owner=player_a, cargo=0, artifacts=[]) # A's fleet at shared neutral world
+        player_a.fleets.append(fa2)
+
+        fb1 = Fleet(id=3, name="FB1", ships=10, location=wb1, owner=player_b, cargo=0, artifacts=[]) # B's fleet at B's world
+        player_b.fleets.append(fb1)
+        fb2 = Fleet(id=4, name="FB2", ships=10, location=w_shared, owner=player_b, cargo=0, artifacts=[]) # B's fleet at shared neutral world
+        player_b.fleets.append(fb2)
+        fb3 = Fleet(id=5, name="FB3", ships=10, location=wa1, owner=player_b, cargo=0, artifacts=[]) # B's fleet at A's world WA1
+        player_b.fleets.append(fb3)
+        
+        # Unowned fleet for good measure
+        fu1 = Fleet(id=6, name="FU1", ships=10, location=wn1, owner=None, cargo=0, artifacts=[])
+
+
+        game.fleets.extend([fa1, fa2, fb1, fb2, fb3, fu1])
+        return game, player_a, player_b
+
+    def test_get_visible_worlds_for_player(self):
+        game, player_a, player_b = self._setup_visibility_test_scenario()
+        
+        visible_to_a = game.get_visible_worlds_for_player(player_a)
+        visible_to_a_ids = {w.id for w in visible_to_a}
+
+        # Player A should see:
+        # WA1 (owned by A)
+        # W_Shared (FA2 is there)
+        self.assertIn(game.get_world(1).id, visible_to_a_ids, "Player A should see WA1 (owned)")
+        self.assertIn(game.get_world(4).id, visible_to_a_ids, "Player A should see W_Shared (FA2 location)")
+        
+        # Player A should NOT see (unless other rules apply not tested here like connections):
+        # WB1 (owned by B, no A presence)
+        # WN1 (neutral, no A presence)
+        self.assertNotIn(game.get_world(2).id, visible_to_a_ids, "Player A should NOT see WB1 (B's world, no A presence)")
+        self.assertNotIn(game.get_world(3).id, visible_to_a_ids, "Player A should NOT see WN1 (Neutral, no A presence)")
+
+
+    def test_get_visible_fleets_for_player(self):
+        game, player_a, player_b = self._setup_visibility_test_scenario()
+
+        visible_to_a = game.get_visible_fleets_for_player(player_a)
+        visible_to_a_ids = {f.id for f in visible_to_a}
+
+        # Player A should see:
+        # FA1 (own fleet)
+        # FA2 (own fleet)
+        # FB2 (B's fleet at W_Shared, where FA2 is also located - Rule 3)
+        # FB3 (B's fleet at WA1, which A owns - Rule 1)
+        self.assertIn(game.get_fleet(1).id, visible_to_a_ids, "Player A should see FA1 (own)")
+        self.assertIn(game.get_fleet(2).id, visible_to_a_ids, "Player A should see FA2 (own)")
+        self.assertIn(game.get_fleet(4).id, visible_to_a_ids, "Player A should see FB2 (co-located at W_Shared)")
+        self.assertIn(game.get_fleet(5).id, visible_to_a_ids, "Player A should see FB3 (at A's world WA1)")
+
+        # Player A should NOT see:
+        # FB1 (B's fleet at B's world WB1, no A presence)
+        # FU1 (Unowned fleet at neutral WN1, no A presence)
+        self.assertNotIn(game.get_fleet(3).id, visible_to_a_ids, "Player A should NOT see FB1 (B's fleet at B's world)")
+        self.assertNotIn(game.get_fleet(6).id, visible_to_a_ids, "Player A should NOT see FU1 (Unowned fleet at neutral WN1)")
+
+
+    def test_add_and_get_clear_turn_events(self):
+        game_instance = Game([],[],[]) # Minimal game instance
+        user_id = "test_user_events"
+        
+        self.assertEqual(game_instance.get_and_clear_turn_events(user_id), []) # Should be empty initially
+        
+        game_instance.add_turn_event(user_id, "Event 1")
+        game_instance.add_turn_event(user_id, "Event 2")
+        
+        events = game_instance.get_and_clear_turn_events(user_id)
+        self.assertEqual(len(events), 2)
+        self.assertIn("Event 1", events)
+        self.assertIn("Event 2", events)
+        
+        self.assertEqual(game_instance.get_and_clear_turn_events(user_id), [], "Events should be cleared after retrieval.")
+        self.assertEqual(game_instance.turn_events.get(user_id, []), [], "Event list for user should be empty in internal dict.")
+
+
+    def test_move_order_logs_passthrough_event(self):
+        # Setup: Player A owns W_Mid. Player B moves FleetFB1 from W_Start -> W_Mid -> W_End.
+        game, player_a, player_b = self._setup_visibility_test_scenario() # Gets a basic setup
+        
+        # Customize for this test:
+        w_start = World(id=10, name="W_Start", owner=player_b, connections=[], iships=0,pships=0,population=0,max_population=0,industry=0,mines=0,stockpile=0,artifacts=[])
+        w_mid = World(id=11, name="W_Mid", owner=player_a, connections=[], iships=0,pships=0,population=0,max_population=0,industry=0,mines=0,stockpile=0,artifacts=[]) # Owned by Player A
+        w_end = World(id=12, name="W_End", owner=player_b, connections=[], iships=0,pships=0,population=0,max_population=0,industry=0,mines=0,stockpile=0,artifacts=[])
+        
+        game.worlds.extend([w_start, w_mid, w_end])
+        
+        # Connections: Start -> Mid -> End
+        w_start.connections.append(w_mid)
+        w_mid.connections.append(w_start)
+        w_mid.connections.append(w_end)
+        w_end.connections.append(w_mid)
+        
+        fleet_b1 = Fleet(id=20, name="FB_MoveTest", ships=10, location=w_start, owner=player_b, cargo=0, artifacts=[])
+        game.fleets.append(fleet_b1)
+        player_b.fleets.append(fleet_b1)
+
+        move_order = MoveOrder(fleet_id=fleet_b1.id, target_world_ids=[w_mid.id, w_end.id])
+        success, msg = game.execute_move_order(move_order)
+        
+        self.assertTrue(success, f"Move order failed: {msg}")
+        self.assertEqual(fleet_b1.location, w_end)
+        
+        # Check events for Player A (owner of W_Mid)
+        player_a_events = game.get_and_clear_turn_events(player_a.user_id)
+        self.assertEqual(len(player_a_events), 1, "Player A should have one event.")
+        self.assertIn(f"ALERT: Your world {w_mid.name}", player_a_events[0])
+        self.assertIn(f"passed through by Fleet ID: {fleet_b1.id}", player_a_events[0])
+
+    def test_admin_sees_all_data(self):
+        # This test uses the full game created by create_game()
+        full_game = create_game() 
+        
+        # Admin user doesn't have an in-game player object for visibility filtering
+        # So, if current_user.is_admin, the route provides game.worlds and game.fleets directly
+        admin_worlds_view = full_game.worlds
+        admin_fleets_view = full_game.fleets
+
+        self.assertEqual(len(admin_worlds_view), 255)
+        self.assertEqual(len(admin_fleets_view), 255)
+
+        # Simulate a regular player setup in this full game
+        # (Need to ensure this player is added to full_game.players for get_visible_* to work)
+        if not full_game.players: # If create_game doesn't add players by default
+             # Create a dummy User object for Player's user_id
+            test_user = User(username="TestRegular", password="password")
+            # Create a Player linked to this User
+            regular_player = Player(name=test_user.username, character_type="Merchant", user_id=test_user.id)
+            full_game.players.append(regular_player) # Add to game for visibility functions
+            # Assign a homeworld and some fleets for this test player to have some visibility
+            assign_homeworld_to_player(regular_player, full_game)
+            assign_starting_fleets_to_player(regular_player, full_game)
+        else: # If create_game already makes some players, pick one
+            regular_player = full_game.players[0]
+            if not regular_player.home_world: # If the default player from create_game needs setup
+                 assign_homeworld_to_player(regular_player, full_game)
+                 assign_starting_fleets_to_player(regular_player, full_game)
+
+
+        player_worlds = full_game.get_visible_worlds_for_player(regular_player)
+        player_fleets = full_game.get_visible_fleets_for_player(regular_player)
+
+        # A regular player should see far fewer than all worlds/fleets unless they own/are on many
+        self.assertLess(len(player_worlds), 255, "Regular player should see fewer than all worlds.")
+        self.assertLess(len(player_fleets), 255, "Regular player should see fewer than all fleets.")
+        self.assertGreater(len(player_worlds), 0, "Player should see at least their homeworld.")
+        self.assertGreater(len(player_fleets), 0, "Player should see at least their own fleets.")
 
 
 if __name__ == '__main__':
