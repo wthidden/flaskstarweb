@@ -34,6 +34,22 @@
             <input type="password" id="confirm_password" name="confirm_password" required>
         </div>
         <div>
+            <label for="character_type">Choose your Character Type:</label>
+            <select id="character_type" name="character_type" required>
+                {% for char_type in character_types %}
+                <option value="{{ char_type }}">{{ char_type }}</option>
+                {% else %}
+                <!-- Fallback if character_types is not passed or empty, though backend validation exists -->
+                <option value="Empire Builder">Empire Builder</option>
+                <option value="Merchant">Merchant</option>
+                <option value="Pirate">Pirate</option>
+                <option value="Artifact Collector">Artifact Collector</option>
+                <option value="Berserker">Berserker</option>
+                <option value="Apostle">Apostle</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
             <button type="submit">Register</button>
         </div>
     </form>

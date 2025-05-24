@@ -5,8 +5,10 @@ import os
 # Adjust the path to import from the parent directory (project root)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app import Game, World, Fleet, Player
+from app import Game, World, Fleet, Player, User # Added User for _register_new_player_setup
 from app import MoveOrder, TransferOrder, LoadCargoOrder, UnloadCargoOrder, order_from_dict
+from app import create_game, assign_homeworld_to_player, assign_starting_fleets_to_player, ALL_ARTIFACTS # Added game setup functions and ALL_ARTIFACTS
+import random # For artifact distribution check
 
 class TestGameCommands(unittest.TestCase):
 
@@ -452,14 +454,135 @@ class TestGameCommands(unittest.TestCase):
         valid_move_dict = {"order_type": "MOVE", "fleet_id": self.fleet1.id, "target_world_ids": [self.world_b.id]}
         invalid_load_dict = {"order_type": "LOAD_CARGO", "fleet_id": self.fleet1.id, "world_id": self.world_a.id, "metal_amount": 9999} # Insufficient stockpile
         
+        # Note: process_turn now requires user_id. Using a dummy one for this test as it's not the focus here.
         raw_orders = [valid_move_dict, invalid_load_dict]
-        results = self.game.process_turn(raw_orders)
+        results = self.game.process_turn("test_user", raw_orders)
         
         self.assertEqual(len(results), 2)
         self.assertIn("(Success: True)", results[1]) # Move is P60, Load is P40. Load happens first.
         self.assertIn("(Success: False)", results[0]) # Load should fail
         self.assertIn("LOAD_CARGO", results[0])
         self.assertIn("MOVE", results[1])
+
+    # --- Tests for create_game() and new player setup ---
+
+    def test_create_full_game_entities_counts(self):
+        """Test the counts of entities created by create_game."""
+        game_instance = create_game()
+        self.assertEqual(len(game_instance.worlds), 255)
+        self.assertEqual(len(game_instance.fleets), 255)
+        
+        total_artifacts_on_worlds = sum(len(world.artifacts) for world in game_instance.worlds)
+        self.assertEqual(total_artifacts_on_worlds, 100) # Assuming ALL_ARTIFACTS has 100
+        
+        self.assertTrue(all(fleet.owner is None for fleet in game_instance.fleets))
+        self.assertTrue(all(fleet.ships == 0 for fleet in game_instance.fleets))
+        self.assertTrue(all(fleet.location is not None for fleet in game_instance.fleets))
+        self.assertEqual(len(game_instance.players), 0) # No players created by default in new create_game
+
+    def test_create_full_game_artifact_distribution(self):
+        """Test artifact distribution in create_game."""
+        game_instance = create_game()
+        ids_on_worlds = set()
+        for world in game_instance.worlds:
+            for artifact in world.artifacts:
+                ids_on_worlds.add(artifact.id)
+        
+        self.assertEqual(len(ids_on_worlds), 100, "All 100 unique artifacts should be placed.")
+        
+        # Sanity check: at least some worlds should have artifacts
+        worlds_with_artifacts = sum(1 for world in game_instance.worlds if world.artifacts)
+        self.assertGreater(worlds_with_artifacts, 0, "Some worlds should have artifacts.")
+        # And not all artifacts on one world (highly unlikely with random.choice over 255 worlds)
+        if worlds_with_artifacts == 1 and len(game_instance.worlds) >1 : # if only one world has artifacts
+             self.assertNotEqual(len(game_instance.worlds[0].artifacts), 100, "Not all artifacts should be on a single world if many worlds exist.")
+
+
+    def test_create_full_game_world_connectivity(self):
+        """Pragmatic checks for world connectivity."""
+        game_instance = create_game()
+        if not game_instance.worlds:
+            self.fail("No worlds created by create_game for connectivity test.")
+
+        self.assertTrue(all(len(world.connections) >= 1 for world in game_instance.worlds if len(game_instance.worlds) > 1))
+        
+        total_connections_sum = sum(len(world.connections) for world in game_instance.worlds)
+        avg_connections = total_connections_sum / len(game_instance.worlds) if len(game_instance.worlds) > 0 else 0
+        
+        # These are approximate, based on the desired avg_connections_per_world=3
+        # A true spanning tree has N-1 edges. Min 1 ensures this.
+        # Avg connections can be slightly off due to randomness and min connection enforcement.
+        self.assertGreaterEqual(avg_connections, 1.8, "Average connections too low.") # Adjusted due to ensure_min_connections
+        self.assertLessEqual(avg_connections, 7.0, "Average connections too high, possibly over-connected.") # Slightly higher upper bound for safety
+
+    def _register_new_player_setup(self, game: Game, username: str, character_type: str) -> Player:
+        """Helper to simulate new player setup steps after User creation."""
+        # User object creation is handled by Flask-Login; here we focus on Player object.
+        # The user_id for Player object would be current_user.id (which is username)
+        ingame_player = Player(name=username, character_type=character_type, user_id=username)
+        game.players.append(ingame_player) # Add to game's player list
+
+        assign_homeworld_to_player(ingame_player, game)
+        assign_starting_fleets_to_player(ingame_player, game)
+        return ingame_player
+
+    def test_new_player_setup_homeworld(self):
+        """Test homeworld assignment for a new player."""
+        game_instance = create_game() # Start with a full, unowned galaxy
+        player1 = self._register_new_player_setup(game_instance, "TestPlayer1", "Merchant")
+
+        self.assertIsNotNone(player1.home_world)
+        self.assertIn(player1.home_world, player1.worlds)
+        self.assertIs(player1.home_world.owner, player1)
+        self.assertEqual(player1.home_world.industry, 30)
+        self.assertEqual(player1.home_world.population, 50)
+        self.assertEqual(player1.home_world.iships, 1)
+        self.assertEqual(player1.home_world.pships, 1)
+        self.assertEqual(player1.home_world.name, "TestPlayer1's Homeworld")
+
+    def test_new_player_setup_fleets(self):
+        """Test starting fleet assignment for a new player."""
+        game_instance = create_game()
+        player1 = self._register_new_player_setup(game_instance, "TestPlayer1", "Pirate")
+
+        self.assertEqual(len(player1.fleets), 5)
+        owned_fleet_count_in_game = 0
+        for fleet in player1.fleets:
+            self.assertIs(fleet.owner, player1)
+            self.assertEqual(fleet.ships, 0)
+            self.assertIs(fleet.location, player1.home_world)
+            self.assertIn(fleet.name, [f"TestPlayer1's Fleet {i+1}" for i in range(5)])
+            
+            # Check if this fleet is also in the main game.fleets list and owned
+            game_fleet = next((f for f in game_instance.fleets if f.id == fleet.id), None)
+            self.assertIsNotNone(game_fleet)
+            if game_fleet.owner is player1:
+                owned_fleet_count_in_game +=1
+        
+        self.assertEqual(owned_fleet_count_in_game, 5, "Player's fleets not correctly reflected as owned in main game list.")
+
+
+    def test_multiple_player_setups(self):
+        """Test setup for multiple new players."""
+        game_instance = create_game()
+        player1 = self._register_new_player_setup(game_instance, "PlayerAlpha", "Empire Builder")
+        player2 = self._register_new_player_setup(game_instance, "PlayerBeta", "Berserker")
+
+        self.assertIsNotNone(player1.home_world)
+        self.assertIsNotNone(player2.home_world)
+        self.assertIsNot(player1.home_world, player2.home_world, "Players should have different homeworlds.")
+        
+        self.assertEqual(len(player1.fleets), 5)
+        self.assertEqual(len(player2.fleets), 5)
+
+        player1_fleet_ids = {f.id for f in player1.fleets}
+        player2_fleet_ids = {f.id for f in player2.fleets}
+        self.assertTrue(player1_fleet_ids.isdisjoint(player2_fleet_ids), "Fleets assigned to different players should be unique.")
+        
+        # Check total number of players in game
+        self.assertEqual(len(game_instance.players), 2)
+        self.assertIn(player1, game_instance.players)
+        self.assertIn(player2, game_instance.players)
 
 
 if __name__ == '__main__':

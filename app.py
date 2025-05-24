@@ -17,7 +17,7 @@ login_manager.login_message_category = 'info'
 
 game = None  # Global game instance
 
-character_types = {"Empire Builder", "Merchant", "Pirate", "Artifact Collector", "Berserker"}
+character_types = {"Empire Builder", "Merchant", "Pirate", "Artifact Collector", "Berserker", "Apostle"}
 
 player_commands = {"Transfer", "Build", "Move", "Fire", "Ambush", "Gift", "Trade", "Diplomacy", "Research", "End Turn"}
 
@@ -37,13 +37,14 @@ class StarWeb:
 class World:
     """This is a docstring for the World class"""
 
-    def __init__(self, id, name, owner: 'Player | None', connections, iships, pships, population, max_population, industry, mines,
-                 stockpile,
-                 artifacts):
+    def __init__(self, id, name, owner: 'Player | None', connections: list, iships: int, pships: int, 
+                 population: int, max_population: int, industry: int, mines: int,
+                 stockpile: int,
+                 artifacts: list['Artifact'] | None = None): # Type hint for artifacts
         self.id = id
         self.name = name
         self.owner: Player | None = owner
-        self.connections = connections
+        self.connections = connections if connections is not None else []
         self.iships = iships
         self.pships = pships
         self.population = population
@@ -51,20 +52,21 @@ class World:
         self.industry = industry
         self.mines = mines
         self.stockpile = stockpile
-        self.artifacts = artifacts
+        self.artifacts: list[Artifact] = artifacts if artifacts is not None else []
 
 
 class Fleet:
     """This is a docstring for the Fleet class"""
 
-    def __init__(self, id, name, ships, location: World | None, owner: 'Player | None', cargo, artifacts):
+    def __init__(self, id, name, ships: int, location: World | None, owner: 'Player | None', 
+                 cargo: int, artifacts: list['Artifact'] | None = None): # Type hint for artifacts
         self.id = id
         self.name = name
         self.ships = ships
         self.location: World | None = location
         self.owner: Player | None = owner
         self.cargo = cargo
-        self.artifacts = artifacts
+        self.artifacts: list[Artifact] = artifacts if artifacts is not None else []
 
 
 class EmpireBuilder:
@@ -128,14 +130,17 @@ class Berserker:
 
 
 class Player:
-    def __init__(self, name: str, character_type: str, home_world: World | None = None, diplomacy: dict | None = None, worlds: list[World] | None = None, fleets: list[Fleet] | None = None):
-        self.name = name
+    def __init__(self, name: str, character_type: str, user_id: str, home_world: World | None = None, diplomacy: dict | None = None, worlds: list[World] | None = None, fleets: list[Fleet] | None = None):
+        self.name = name # Often same as User.username
         self.character_type = character_type
-        self.home_world: World | None = home_world 
+        self.user_id = user_id # Link to Flask-Login User.id
+        self.home_world: World | None = home_world
         self.diplomacy = diplomacy if diplomacy is not None else {}
-        self.worlds: list[World] = worlds if worlds is not None else []
+        self.worlds: list[World] = [home_world] if home_world and (worlds is None or home_world not in worlds) else (worlds if worlds is not None else [])
+        if home_world and not self.worlds: # Ensure homeworld is in worlds if worlds was passed as empty or None
+            self.worlds.append(home_world)
         self.fleets: list[Fleet] = fleets if fleets is not None else []
-        self.character = self.create_character() # This might need self to be passed if methods depend on player state
+        self.character = self.create_character()
 
     def create_character(self):
         # Assuming character classes now take the Player object itself if needed
@@ -155,6 +160,80 @@ class Player:
             return Berserker(id=self.name, name=self.name, world=self.home_world, fleets=self.fleets, artifacts=[], ships=0)
         else:
             return None
+
+# Artifact Class
+class Artifact:
+    def __init__(self, id: str, name: str, points: int = 0, is_plastic: bool = False, category: str = "Standard"):
+        self.id = id # e.g., "V1", "V2", ... "V100"
+        self.name = name
+        self.points = points # General score, specific character bonuses handled by game logic later
+        self.is_plastic = is_plastic
+        self.category = category # "Standard", "Special", "GreatestTreasure" (for easier identification if needed)
+        # For standard artifacts, we might add first_word, second_word attributes if useful for scoring later
+        self.first_word = ""
+        self.second_word = ""
+        if category == "Standard": 
+            parts = name.split(" ", 1)
+            if len(parts) == 2:
+                self.first_word = parts[0]
+                self.second_word = parts[1]
+        # No special parsing needed for "Special" category for first/second word here based on prompt
+
+    def __repr__(self):
+        return f"<Artifact {self.id}: {self.name} ({self.category}, {self.points}pts, Plastic: {self.is_plastic})>"
+
+# Global Artifact Data and Instances
+STANDARD_ARTIFACT_FIRST_WORDS = ["Platinum", "Ancient", "Vegan", "Blessed", "Arcturian", "Silver", "Titanium", "Gold", "Radiant", "Plastic"]
+STANDARD_ARTIFACT_SECOND_WORDS = ["Lodestar", "Pyramid", "Stardust", "Shekel", "Crown", "Sword", "Moonstone", "Sepulchre", "Sphinx"]
+
+SPECIAL_ARTIFACT_NAMES = [
+    "Treasure of Polaris", "Slippers of Venus", "Radioactive Isotope", 
+    "Lesser of Two Evils", "Nebula Scroll Volume 1", "Nebula Scroll Volume 2", 
+    "Nebula Scroll Volume 3", "Nebula Scroll Volume 4", "Nebula Scroll Volume 5", 
+    "The Black Box"
+]
+
+ALL_ARTIFACTS = []
+artifact_id_counter = 1
+
+# Create Standard Artifacts (90 total)
+for first_word in STANDARD_ARTIFACT_FIRST_WORDS:
+    if artifact_id_counter > 90: break
+    for second_word in STANDARD_ARTIFACT_SECOND_WORDS:
+        if artifact_id_counter > 90: break
+        artifact_name = f"{first_word} {second_word}"
+        is_plastic_artifact = (first_word.upper() == "PLASTIC")
+        
+        # Simplified base points for demonstration; actual scoring is complex
+        points_val = -10 if is_plastic_artifact else 5 
+
+        ALL_ARTIFACTS.append(Artifact(
+            id=f"V{artifact_id_counter}",
+            name=artifact_name,
+            points=points_val,
+            is_plastic=is_plastic_artifact,
+            category="Standard"
+        ))
+        artifact_id_counter += 1
+
+# Create Special Artifacts (10 total, ensuring artifact_id_counter continues to 100)
+# Points for special artifacts also vary. Using placeholder values.
+special_points = {
+    "Treasure of Polaris": 20, "Slippers of Venus": 10, "Radioactive Isotope": -30,
+    "Lesser of Two Evils": -15, "Nebula Scroll Volume 1": 0, "Nebula Scroll Volume 2": 0,
+    "Nebula Scroll Volume 3": 0, "Nebula Scroll Volume 4": 0, "Nebula Scroll Volume 5": 0,
+    "The Black Box": 0 
+}
+for name in SPECIAL_ARTIFACT_NAMES:
+    if artifact_id_counter > 100: break # Should be exactly 10 for 100 total
+    ALL_ARTIFACTS.append(Artifact(
+        id=f"V{artifact_id_counter}",
+        name=name,
+        points=special_points.get(name, 0),
+        is_plastic=False, # None of the specials are plastic
+        category="Special"
+    ))
+    artifact_id_counter += 1
 
 
 # Order Classes
@@ -237,39 +316,115 @@ def stream_player(player):
     return render_template('player.html', player=player)
 
 
-artifact_first_names = ["Platinum", "Ancient", "Vegan", "Blessed", "Arcturian", "Silver", "Titanium", "Gold", "Radiant",
-                        "Plastic"]
-artifact_second_names = ["Lodestar", "Pyramid", "Stardust", "Shekel", "Crown", "Sword", "Moonstone", "Sepulchre",
-                         "Sphinx"]
-artifact_list = [[first + " " + second for first in artifact_first_names for second in artifact_second_names]]
+# The old artifact_first_names, artifact_second_names, and artifact_list are now replaced by ALL_ARTIFACTS.
+
+def connect_all_worlds(worlds: list[World], min_connections_per_world: int = 1, avg_connections_per_world: int = 3):
+    """
+    Connects all worlds in the provided list to ensure a connected graph,
+    then adds more connections to meet average and minimums.
+    """
+    if not worlds:
+        return
+
+    num_worlds = len(worlds)
+
+    # --- a. Ensure Basic Connectivity (Spanning Tree) ---
+    # Initialize all worlds with empty connections (already done in World.__init__)
+    for world in worlds:
+        world.connections = []
+
+    connected_set = set()
+    unconnected_set = set(worlds)
+    
+    # Start with the first world
+    start_world = worlds[0]
+    connected_set.add(start_world)
+    unconnected_set.remove(start_world)
+
+    while unconnected_set:
+        w1 = random.choice(list(connected_set)) # Pick a random world from the connected set
+        w2 = random.choice(list(unconnected_set)) # Pick a random world from the unconnected set
+
+        # Connect w1 and w2
+        if w2 not in w1.connections:
+            w1.connections.append(w2)
+        if w1 not in w2.connections:
+            w2.connections.append(w1)
+        
+        unconnected_set.remove(w2)
+        connected_set.add(w2)
+
+    # --- b. Add More Random Connections ---
+    # Calculate current number of unique edges
+    current_edges = 0
+    for world in worlds:
+        current_edges += len(world.connections)
+    current_edges //= 2 # Each edge is counted twice
+
+    desired_total_edges = (num_worlds * avg_connections_per_world) / 2
+    
+    # Max attempts to prevent infinite loop if graph becomes too dense to easily find new connections
+    max_attempts_b = num_worlds * num_worlds 
+    attempts_b = 0
+
+    while current_edges < desired_total_edges and attempts_b < max_attempts_b:
+        w_a = random.choice(worlds)
+        w_b = random.choice(worlds)
+        attempts_b +=1
+
+        if w_a is not w_b and w_b not in w_a.connections:
+            w_a.connections.append(w_b)
+            w_b.connections.append(w_a)
+            current_edges += 1
+        
+    # --- c. Ensure Minimum Connections ---
+    max_attempts_c_world = num_worlds * 10 # Max attempts per world to find new connections
+
+    for world in worlds:
+        attempts_c_this_world = 0
+        while len(world.connections) < min_connections_per_world and attempts_c_this_world < max_attempts_c_world :
+            attempts_c_this_world +=1
+            # Pick a random other world
+            other_world = random.choice(worlds)
+            
+            if world is not other_world and other_world not in world.connections:
+                world.connections.append(other_world)
+                other_world.connections.append(world)
+            
+            if attempts_c_this_world >= max_attempts_c_world:
+                print(f"Warning: Max attempts reached for world {world.id} to meet min connections. Current: {len(world.connections)}")
 
 
-def create_worlds():
-    worlds = []
-    for i in range(1, 11):
-        worlds.append(
-            World(i, "World " + str(i), None, [], random.randint(1, 10), random.randint(1, 10), random.randint(1, 10),
-                  random.randint(1, 10), random.randint(1, 10), random.randint(1, 10), random.randint(1, 10), []))
-    return worlds
+# Old create_worlds, connect_worlds, create_fleets are removed or commented out
+# as their logic is now part of the new create_game or will be handled differently.
 
+# def create_worlds():
+#     worlds = []
+#     for i in range(1, 11): # Old: creates 10 worlds
+#         worlds.append(
+#             World(i, "World " + str(i), None, [], random.randint(1, 10), random.randint(1, 10), random.randint(1, 10),
+#                   random.randint(1, 10), random.randint(1, 10), random.randint(1, 10), random.randint(1, 10), [])
+#         )
+#     return worlds
 
-def connect_worlds(worlds: []):
-    max_worlds = len(worlds)
-    for i in range(0, max_worlds - 1):
-        connection_number = 1 + random.randint(1, 3)
-        for c in range(0, connection_number):
+# def connect_worlds(worlds: []): # This might be reused or adapted later
+#     max_worlds = len(worlds)
+#     for i in range(0, max_worlds - 1):
+#         connection_number = 1 + random.randint(1, 3)
+#         for c in range(0, connection_number):
+#             j = random.randint(0, max_worlds - 1)
+#             if i != j:
+#                 # Ensure not already connected to avoid duplicate connections
+#                 if worlds[j] not in worlds[i].connections:
+#                     worlds[i].connections.append(worlds[j])
+#                 if worlds[i] not in worlds[j].connections:
+#                     worlds[j].connections.append(worlds[i])
 
-            j = random.randint(0, max_worlds - 1)
-            if i != j:
-                worlds[i].connections.append(worlds[j])
-                worlds[j].connections.append(worlds[i])
-
-
-def create_fleets():
-    fleets = []
-    for i in range(1, 11):
-        fleets.append(Fleet(i, "Fleet " + str(i), 0, None, None, 0, 0))
-    return fleets
+# def create_fleets(): # Old: creates 10 fleets
+#     fleets = []
+#     for i in range(1, 11):
+#         fleets.append(Fleet(i, "Fleet " + str(i), 0, None, None, 0, [])) # Ensure artifacts is a list
+#     return fleets
 
 
 def input_worlds(worlds):
@@ -834,67 +989,64 @@ def order_from_dict(order_dict: dict) -> Order | None:
 
 
 def create_game():
-    # --- Game Initialization Refactor ---
-    num_players = 2 # Example: Create 2 players
-    num_worlds_per_player = 2 # Each player gets a couple of starting worlds
-    num_fleets_per_player = 1
-
-    all_worlds = create_worlds() # Creates 10 worlds by default, no owners
-    connect_worlds(all_worlds)
-
-    players = []
-    player_character_types = ["Merchant", "Empire Builder", "Pirate", "Berserker"] # Cycle through these
+    # --- create_game() Refactored for Large Universe ---
     
-    # Create Players
-    for i in range(num_players):
-        player_name = f"Player {i+1}"
-        char_type_index = i % len(player_character_types)
-        # Homeworld will be assigned shortly
-        player = Player(name=player_name, character_type=player_character_types[char_type_index], home_world=None)
-        players.append(player)
+    new_game = Game(worlds=[], fleets=[], players=[]) # Initialize with empty lists
 
-    # Assign Homeworlds and initial worlds to players
-    world_idx_counter = 0
-    for i, player in enumerate(players):
-        if world_idx_counter < len(all_worlds):
-            home_world_candidate = all_worlds[world_idx_counter]
-            player.home_world = home_world_candidate
-            home_world_candidate.owner = player # Assign player object as owner
-            player.worlds.append(home_world_candidate)
-            world_idx_counter += 1
+    # Create 255 Worlds
+    for i in range(1, 256): # Worlds W1 to W255
+        world = World(
+            id=i,
+            name=f"World {i}",
+            owner=None, # Initially unowned
+            connections=[], # Connections can be established later if needed
+            iships=0,
+            pships=0,
+            population=random.randint(0, 20),
+            max_population=random.randint(50, 150),
+            industry=random.randint(0, 5),
+            mines=random.randint(0, 3),
+            stockpile=random.randint(0, 50),
+            artifacts=[] # Initialized as empty list
+        )
+        new_game.worlds.append(world)
+
+    # Connect the worlds
+    connect_all_worlds(new_game.worlds) # Call the new connection logic
+
+    # Distribute 100 Artifacts
+    if ALL_ARTIFACTS and new_game.worlds: # Ensure there are artifacts and worlds
+        shuffled_artifacts = list(ALL_ARTIFACTS)
+        random.shuffle(shuffled_artifacts)
+
+        for artifact_instance in shuffled_artifacts:
+            chosen_world = random.choice(new_game.worlds)
+            chosen_world.artifacts.append(artifact_instance)
+    
+    # Create 255 Unowned Fleets at Random Locations
+    for i in range(1, 256): # Fleets F1 to F255
+        if not new_game.worlds: # Should not happen if worlds were created
+            initial_location_world = None
+        else:
+            initial_location_world = random.choice(new_game.worlds)
         
-        # Assign additional worlds if available
-        for _ in range(num_worlds_per_player -1): # -1 because homeworld is already one
-            if world_idx_counter < len(all_worlds):
-                other_world = all_worlds[world_idx_counter]
-                if other_world.owner is None: # Only take unowned worlds
-                    other_world.owner = player
-                    player.worlds.append(other_world)
-                world_idx_counter +=1
-            else:
-                break # No more worlds to assign
+        fleet = Fleet(
+            id=i,
+            name=f"Fleet {i}",
+            ships=0, # All fleets start with 0 ships
+            location=initial_location_world,
+            owner=None, # Initially unowned
+            cargo=0,
+            artifacts=[] # Initialized as empty list
+        )
+        new_game.fleets.append(fleet)
 
-    all_fleets = []
-    fleet_id_counter = 1
-    for i, player in enumerate(players):
-        if player.home_world: # Ensure player has a homeworld to place fleets
-            for _ in range(num_fleets_per_player):
-                fleet = Fleet(
-                    id=fleet_id_counter,
-                    name=f"Fleet {fleet_id_counter} ({player.name})",
-                    ships=random.randint(5, 10),
-                    location=player.home_world, # Start at homeworld
-                    owner=player, # Assign Player object
-                    cargo=0,
-                    artifacts=[]
-                )
-                all_fleets.append(fleet)
-                player.fleets.append(fleet)
-                fleet_id_counter += 1
-    
-    # Assign remaining unowned worlds to be ownerless (None) - create_worlds already does this.
-    # Ensure all worlds and fleets are in the main game lists
-    return Game(worlds=all_worlds, fleets=all_fleets, players=players)
+    # Player creation and assignment logic is removed for now,
+    # as this setup is for a large, initially unowned universe.
+    # new_game.players will remain empty or be handled by a separate mechanism.
+    # The old player assignment logic from previous create_game is omitted here.
+
+    return new_game
 
 
 def get_or_create_game():
@@ -912,7 +1064,12 @@ def hello_world():  # put application's code here
 @login_required # Protect this route
 def display_game():
     game_instance = get_or_create_game()
-    return render_template('game.html', game=game_instance)
+    current_player_ingame = None
+    if current_user.is_authenticated: # current_user is from Flask-Login
+        # Find the in-game Player object that corresponds to the logged-in User
+        current_player_ingame = next((p for p in game_instance.players if p.user_id == current_user.id), None)
+    
+    return render_template('game.html', game=game_instance, current_player_ingame=current_player_ingame)
 
 @app.route('/move_fleet', methods=['POST'])
 def move_fleet():
@@ -921,33 +1078,117 @@ def move_fleet():
     flash("The direct /move_fleet route is deprecated. Please use the 'Plan Your Turn' interface to move fleets.")
     return redirect(url_for('display_game'))
 
+# Helper functions for registration
+def assign_homeworld_to_player(player_obj: Player, game_instance: Game):
+    unowned_worlds = [world for world in game_instance.worlds if world.owner is None]
+    if not unowned_worlds:
+        # This should not happen in a new game with 255 worlds and few players
+        raise Exception("No unowned worlds available for new player!") 
+    
+    selected_homeworld = random.choice(unowned_worlds) # random.choice
+    
+    selected_homeworld.owner = player_obj
+    selected_homeworld.name = f"{player_obj.name}'s Homeworld" # Rename for clarity
+    selected_homeworld.population = 50
+    selected_homeworld.max_population = 100
+    selected_homeworld.industry = 30
+    selected_homeworld.mines = 2
+    selected_homeworld.stockpile = 30
+    selected_homeworld.iships = 1
+    selected_homeworld.pships = 1
+    # selected_homeworld.turns_owned = 1 # If 'turns_owned' attribute exists
+    # Ensure connections made by connect_all_worlds are preserved.
+    
+    player_obj.home_world = selected_homeworld
+    if selected_homeworld not in player_obj.worlds:
+        player_obj.worlds.append(selected_homeworld)
+    
+    print(f"Homeworld {selected_homeworld.name} (ID: {selected_homeworld.id}) assigned to player {player_obj.name}.")
+    return selected_homeworld
+
+def assign_starting_fleets_to_player(player_obj: Player, game_instance: Game):
+    if not player_obj.home_world:
+        raise Exception(f"Player {player_obj.name} has no homeworld to assign fleets to.")
+
+    unowned_fleets = [fleet for fleet in game_instance.fleets if fleet.owner is None]
+    
+    # Ensure there are enough unowned fleets; create more if necessary (though create_game should make plenty)
+    fleets_to_assign_count = 5
+    if len(unowned_fleets) < fleets_to_assign_count:
+        print(f"Warning: Not enough unowned fleets ({len(unowned_fleets)} found) for new player {player_obj.name}. Need {fleets_to_assign_count}.")
+        # Optionally create more fleets here if this is a possible scenario.
+        # For now, we'll assign as many as possible.
+        fleets_to_assign_count = len(unowned_fleets)
+        if fleets_to_assign_count == 0:
+            print(f"No unowned fleets to assign to player {player_obj.name}")
+            return # No fleets to assign
+
+    starting_fleets_assigned = 0
+    for i in range(fleets_to_assign_count):
+        fleet_to_assign = unowned_fleets[i] 
+        fleet_to_assign.owner = player_obj
+        fleet_to_assign.location = player_obj.home_world
+        fleet_to_assign.ships = 0 # Explicitly ensure 0 ships
+        fleet_to_assign.name = f"{player_obj.name}'s Fleet {starting_fleets_assigned + 1}" # Rename for clarity
+        if fleet_to_assign not in player_obj.fleets:
+            player_obj.fleets.append(fleet_to_assign)
+        starting_fleets_assigned +=1
+    
+    print(f"{starting_fleets_assigned} starting fleets assigned to player {player_obj.name} at {player_obj.home_world.name}.")
+
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
         confirm_password = request.form.get('confirm_password')
+        character_type = request.form.get('character_type')
 
-        if not username or not password or not confirm_password:
-            flash('All fields are required!', 'danger')
+
+        if not username or not password or not confirm_password or not character_type:
+            flash('All fields, including character type, are required!', 'danger')
             return redirect(url_for('register'))
 
         if password != confirm_password:
             flash('Passwords do not match!', 'danger')
+            return redirect(url_for('register'))
+        
+        if character_type not in character_types: # Validate against the global set
+            flash('Invalid character type selected!', 'danger')
             return redirect(url_for('register'))
 
         if username in users_db: # users_db is global
             flash('Username already exists. Please choose a different one.', 'warning')
             return redirect(url_for('register'))
 
-        # Create new user
-        new_user = User(username=username, password=password) # User class should be defined above
-        users_db[username] = new_user # Store user (username is the key/id)
+        # Create new Flask-Login User
+        new_user = User(username=username, password=password) 
+        users_db[username] = new_user 
 
-        flash(f'User {username} registered successfully! Please login.', 'success')
-        return redirect(url_for('login')) # Assumes a 'login' route exists
+        game_instance = get_or_create_game()
 
-    return render_template('register.html')
+        # Create the in-game Player object
+        ingame_player = Player(name=new_user.username, 
+                               character_type=character_type, 
+                               user_id=new_user.id) # Link to User.id
+        game_instance.players.append(ingame_player)
+
+        # Assign homeworld and starting fleets
+        try:
+            assign_homeworld_to_player(ingame_player, game_instance)
+            assign_starting_fleets_to_player(ingame_player, game_instance)
+            flash(f'User {new_user.username} and Player {ingame_player.name} created as {character_type}. Homeworld and fleets assigned. Please login.', 'success')
+        except Exception as e:
+            flash(f'User {new_user.username} created, but error setting up player in game: {e}. Please contact admin.', 'danger')
+            # Potentially remove ingame_player from game_instance.players and new_user from users_db if setup fails critically
+            # For now, user exists, can try logging in, but might not have game entities.
+            # Or, delete the user: users_db.pop(username, None)
+            return redirect(url_for('register')) # Or a specific error page
+
+        return redirect(url_for('login')) 
+
+    return render_template('register.html', character_types=character_types) # Pass character_types to template
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():

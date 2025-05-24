@@ -24,10 +24,37 @@
       {% endif %}
     {% endwith %}
 
+    {% if current_player_ingame %}
+        <h3>Your Empire: {{ current_player_ingame.name }} ({{ current_player_ingame.character_type }})</h3>
+        {% if current_player_ingame.home_world %}
+            <p><strong>Homeworld:</strong> {{ current_player_ingame.home_world.name }} (ID: {{ current_player_ingame.home_world.id }})
+                - Pop: {{ current_player_ingame.home_world.population }}
+                - Ind: {{ current_player_ingame.home_world.industry }}
+                - Mines: {{ current_player_ingame.home_world.mines }}
+                - Metal: {{ current_player_ingame.home_world.stockpile }}
+                - IShips: {{ current_player_ingame.home_world.iships }}
+                - PShips: {{ current_player_ingame.home_world.pships }}
+            </p>
+            <h4>Your Fleets (at Homeworld or elsewhere):</h4>
+            {% if current_player_ingame.fleets %}
+                <ul>
+                {% for fleet in current_player_ingame.fleets %}
+                    <li>{{ fleet.name }} (ID: {{ fleet.id }}) - Location: {{ fleet.location.name if fleet.location else 'N/A' }} (ID: {{ fleet.location.id if fleet.location else 'N/A' }}) - Ships: {{ fleet.ships }} - Cargo: {{ fleet.cargo }}</li>
+                {% endfor %}
+                </ul>
+            {% else %}
+                <p>You have no fleets assigned.</p>
+            {% endif %}
+        {% else %}
+            <p>You do not have a homeworld assigned in the game yet.</p>
+        {% endif %}
+        <hr>
+    {% endif %}
+
     <!-- Ensure current_user is available for the game display logic if needed, -->
     <!-- or protect parts of this page with @login_required in the route -->
 
-    <h2>Worlds</h2>
+    <h2>Full Galaxy Worlds List</h2>
     <table border="1">
         <thead>
             <tr>
@@ -73,7 +100,7 @@
         </tbody>
     </table>
 
-    <h2>Fleets</h2>
+    <h2>Full Galaxy Fleets List</h2>
     {% if game.fleets %}
     <table border="1">
         <thead>
@@ -83,6 +110,7 @@
                 <th>Owner</th>
                 <th>Location</th>
                 <th>Ships</th>
+                <th>Cargo</th>
             </tr>
         </thead>
         <tbody>
@@ -90,15 +118,16 @@
             <tr>
                 <td>{{ fleet.id }}</td>
                 <td>{{ fleet.name }}</td>
-                <td>{{ fleet.owner.name if fleet.owner else 'N/A' }}</td>
+                <td>{{ fleet.owner.name if fleet.owner else 'Unowned' }}</td>
                 <td>
                     {% if fleet.location %}
-                        {{ fleet.location.name }} (ID: {{ fleet.location.id }})
+                        {{ fleet.location.name }} (ID: {{ fleet.location.id if fleet.location else 'N/A' }})
                     {% else %}
                         In Deep Space / No Location
                     {% endif %}
                 </td>
                 <td>{{ fleet.ships }}</td>
+                <td>{{ fleet.cargo }}</td>
             </tr>
             {% endfor %}
         </tbody>
