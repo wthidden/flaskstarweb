@@ -40,7 +40,9 @@ class World:
     def __init__(self, id, name, owner: 'Player | None', connections: list, iships: int, pships: int, 
                  population: int, max_population: int, industry: int, mines: int,
                  stockpile: int,
-                 artifacts: list['Artifact'] | None = None): # Type hint for artifacts
+                 artifacts: list['Artifact'] | None = None, # Type hint for artifacts
+                 turns_owned: int = 0, is_black_hole: bool = False,
+                 robot_units: int = 0, convert_units: int = 0, converts_owner_id: str | None = None): 
         self.id = id
         self.name = name
         self.owner: Player | None = owner
@@ -53,13 +55,19 @@ class World:
         self.mines = mines
         self.stockpile = stockpile
         self.artifacts: list[Artifact] = artifacts if artifacts is not None else []
+        self.turns_owned = turns_owned
+        self.is_black_hole = is_black_hole
+        self.robot_units = robot_units
+        self.convert_units = convert_units
+        self.converts_owner_id = converts_owner_id
 
 
 class Fleet:
     """This is a docstring for the Fleet class"""
 
     def __init__(self, id, name, ships: int, location: World | None, owner: 'Player | None', 
-                 cargo: int, artifacts: list['Artifact'] | None = None): # Type hint for artifacts
+                 cargo: int, artifacts: list['Artifact'] | None = None, # Type hint for artifacts
+                 is_at_peace: bool = False): 
         self.id = id
         self.name = name
         self.ships = ships
@@ -67,70 +75,167 @@ class Fleet:
         self.owner: Player | None = owner
         self.cargo = cargo
         self.artifacts: list[Artifact] = artifacts if artifacts is not None else []
+        self.is_at_peace = is_at_peace
+
+    def get_max_cargo_capacity(self) -> int:
+        """Calculates max cargo based on ship count and owner type."""
+        if self.owner and self.owner.character_type == "Merchant":
+            return self.ships * 2
+        return self.ships * 1 # Default for non-Merchants or unowned fleets
 
 
 class EmpireBuilder:
     """This is a docstring for the EmpireBuilder class"""
 
-    def __init__(self, id, name, world, fleets, artifacts, ships):
-        self.id = id
-        self.name = name
-        self.world = world
-        self.fleets = fleets
-        self.artifacts = artifacts
-        self.ships = ships
+    def __init__(self, player: 'Player'):
+        self.player = player
+        # Future special powers:
+        # - Build cost reductions
+        # - Faster Terraforming / Population Growth
+
+    def calculate_victory_points(self, game: 'Game') -> int:
+        """
+        EmpireBuilder VPs:
+        - 1 point per 10 population controlled.
+        - 1 point per industry controlled.
+        - 1 point per mine controlled.
+        """
+        vp = 0
+        total_population = 0
+        total_industry = 0
+        total_mines = 0
+
+        for world in self.player.worlds:
+            if world.owner == self.player: # Ensure the world is still owned by the player
+                total_population += world.population
+                total_industry += world.industry
+                total_mines += world.mines
+        
+        vp += total_population // 10
+        vp += total_industry
+        vp += total_mines
+        return vp
 
 
 class Merchant:
     """This is a docstring for the Merchant class"""
 
-    def __init__(self, id, name, world, fleets, artifacts, ships):
-        self.id = id
-        self.name = name
-        self.world = world
-        self.fleets = fleets
-        self.artifacts = artifacts
-        self.ships = ships
+    def __init__(self, player: 'Player'):
+        self.player = player
+        # Future special powers:
+        # - Trade bonuses
+        # - Access to special markets/items
+
+    def calculate_victory_points(self, game: 'Game') -> int:
+        """
+        Merchant VPs:
+        - Return 0 for now (Action-based VPs will be implemented later).
+        """
+        return 0
 
 
 class Pirate:
     """This is a docstring for the Pirate class"""
 
-    def __init__(self, id, name, world, fleets, artifacts, ships):
-        self.id = id
-        self.name = name
-        self.world = world
-        self.fleets = fleets
-        self.artifacts = artifacts
-        self.ships = ships
+    def __init__(self, player: 'Player'):
+        self.player = player
+        # Future special powers:
+        # - Ambush bonuses
+        # - Ability to demand tribute
+
+    def calculate_victory_points(self, game: 'Game') -> int:
+        """
+        Pirate VPs:
+        - 3 points per Fleet owned.
+        """
+        vp = 0
+        vp += len(self.player.fleets) * 3
+        return vp
 
 
 class ArtifactCollector:
     """This is a docstring for the ArtifactCollector class"""
 
-    def __init__(self, id, name, world, fleets, artifacts, ships):
-        self.id = id
-        self.name = name
-        self.world = world
-        self.fleets = fleets
-        self.artifacts = artifacts
-        self.ships = ships
+    def __init__(self, player: 'Player'):
+        self.player = player
+        # Future special powers:
+        # - Better artifact identification/analysis
+        # - Bonuses for specific artifact sets
+
+    def calculate_victory_points(self, game: 'Game') -> int:
+        """
+        ArtifactCollector VPs:
+        - "Ancient" or "Pyramid" (non-Plastic): +30 points each.
+        - "Ancient Pyramid": +90 points.
+        - Other standard non-plastic artifacts: +15 points each.
+        - Plastic artifacts: +0 points.
+        - "Treasure of Polaris", "Slippers of Venus", "Radioactive Isotope", 
+          "Lesser of Two Evils", "The Black Box": +30 points each.
+        """
+        vp = 0
+        
+        # Collect all artifacts owned by the player from their worlds and fleets
+        owned_artifacts: list[Artifact] = []
+        for world in self.player.worlds:
+            if world.owner == self.player:
+                owned_artifacts.extend(world.artifacts)
+        for fleet in self.player.fleets:
+            if fleet.owner == self.player:
+                owned_artifacts.extend(fleet.artifacts)
+
+        for artifact in owned_artifacts:
+            if artifact.name == "Ancient Pyramid": # Specific check for "Ancient Pyramid"
+                vp += 90
+            elif artifact.category == "Standard":
+                if artifact.is_plastic:
+                    vp += 0 # Explicitly 0 for plastic
+                elif artifact.first_word == "Ancient" or artifact.second_word == "Pyramid":
+                    # This covers "Ancient X" or "X Pyramid" that are not "Ancient Pyramid"
+                    vp += 30
+                else:
+                    # Other standard non-plastic artifacts
+                    vp += 15
+            elif artifact.category == "Special":
+                # Specific list of special artifacts for +30 VP
+                if artifact.name in [
+                    "Treasure of Polaris", "Slippers of Venus", 
+                    "Radioactive Isotope", "Lesser of Two Evils", "The Black Box"
+                ]:
+                    vp += 30
+                # Nebula Scrolls and other special artifacts not in the list give VP based on their points attribute (usually 0 unless set otherwise)
+                # or through other game mechanics (like set collection for Nebula Scrolls).
+                # For now, we only add for the explicitly listed ones.
+                # The problem description only lists these 5 for +30 VP.
+        return vp
 
 
 class Berserker:
     """This is a docstring for the Berserker class"""
 
-    def __init__(self, id, name, world, fleets, artifacts, ships):
-        self.id = id
-        self.name = name
-        self.world = world
-        self.fleets = fleets
-        self.artifacts = artifacts
-        self.ships = ships
+    def __init__(self, player: 'Player'):
+        self.player = player
+        # Future special powers:
+        # - Combat bonuses when outnumbered
+        # - Resistance to certain types of damage
+
+    def calculate_victory_points(self, game: 'Game') -> int:
+        """
+        Berserker VPs:
+        - 5 points per world in self.player.worlds where robot_units > 0 and 
+          population == 0 and convert_units == 0.
+        """
+        vp = 0
+        for world in self.player.worlds:
+            if world.owner == self.player: # Ensure player owns the world
+                if world.robot_units > 0 and world.population == 0 and world.convert_units == 0:
+                    vp += 5
+        return vp
 
 
 class Player:
-    def __init__(self, name: str, character_type: str, user_id: str, home_world: World | None = None, diplomacy: dict | None = None, worlds: list[World] | None = None, fleets: list[Fleet] | None = None):
+    def __init__(self, name: str, character_type: str, user_id: str, home_world: World | None = None, 
+                 diplomacy: dict | None = None, worlds: list[World] | None = None, fleets: list[Fleet] | None = None,
+                 victory_points: int = 0, allies: list[str] | None = None):
         self.name = name # Often same as User.username
         self.character_type = character_type
         self.user_id = user_id # Link to Flask-Login User.id
@@ -140,6 +245,8 @@ class Player:
         if home_world and not self.worlds: # Ensure homeworld is in worlds if worlds was passed as empty or None
             self.worlds.append(home_world)
         self.fleets: list[Fleet] = fleets if fleets is not None else []
+        self.victory_points = victory_points
+        self.allies: list[str] = allies if allies is not None else []
         self.character = self.create_character()
 
     def create_character(self):
@@ -148,18 +255,58 @@ class Player:
         # or they take specific attributes. Let's assume they are simple for now.
         # If EmpireBuilder(self) means passing the player instance, this is fine.
         if self.character_type == "Empire Builder":
-            # Pass necessary player attributes if character class expects them
-            return EmpireBuilder(id=self.name, name=self.name, world=self.home_world, fleets=self.fleets, artifacts=[], ships=0) # Example
+            return EmpireBuilder(player=self)
         elif self.character_type == "Merchant":
-            return Merchant(id=self.name, name=self.name, world=self.home_world, fleets=self.fleets, artifacts=[], ships=0)
+            return Merchant(player=self)
         elif self.character_type == "Pirate":
-            return Pirate(id=self.name, name=self.name, world=self.home_world, fleets=self.fleets, artifacts=[], ships=0)
+            return Pirate(player=self)
         elif self.character_type == "Artifact Collector":
-            return ArtifactCollector(id=self.name, name=self.name, world=self.home_world, fleets=self.fleets, artifacts=[], ships=0)
+            return ArtifactCollector(player=self)
         elif self.character_type == "Berserker":
-            return Berserker(id=self.name, name=self.name, world=self.home_world, fleets=self.fleets, artifacts=[], ships=0)
+            return Berserker(player=self)
+        elif self.character_type == "Apostle":
+            return Apostle(player=self)
         else:
             return None
+
+# Apostle Class (New)
+class Apostle:
+    """This is a docstring for the Apostle class"""
+    def __init__(self, player: 'Player'):
+        self.player = player
+        # Future special powers:
+        # - Convert population/units
+        # - Shot penalty for fleets at worlds with friendly converts
+        # - Unique 'Convert' unit type
+
+    def calculate_victory_points(self, game: 'Game') -> int:
+        """
+        Apostle VPs:
+        - 5 points per world in self.player.worlds.
+        - 1 point per 10 convert_units summed across all game.worlds 
+          where world.converts_owner_id == self.player.user_id.
+        - Additional 5 points per world in self.player.worlds where 
+          world.convert_units > 0 and world.population == 0 and world.robot_units == 0.
+        """
+        vp = 0
+        
+        # 5 points per world owned
+        for world in self.player.worlds:
+            if world.owner == self.player:
+                vp += 5
+                # Additional 5 points if world is fully converted by this apostle
+                if world.convert_units > 0 and world.population == 0 and world.robot_units == 0 and world.converts_owner_id == self.player.user_id:
+                    vp += 5
+
+        # 1 point per 10 total convert_units attributed to this Apostle
+        total_apostle_converts = 0
+        for world in game.worlds: # Iterate all worlds in the game
+            if world.converts_owner_id == self.player.user_id:
+                total_apostle_converts += world.convert_units
+        
+        vp += total_apostle_converts // 10
+        
+        return vp
 
 # Artifact Class
 class Artifact:
@@ -186,52 +333,58 @@ class Artifact:
 STANDARD_ARTIFACT_FIRST_WORDS = ["Platinum", "Ancient", "Vegan", "Blessed", "Arcturian", "Silver", "Titanium", "Gold", "Radiant", "Plastic"]
 STANDARD_ARTIFACT_SECOND_WORDS = ["Lodestar", "Pyramid", "Stardust", "Shekel", "Crown", "Sword", "Moonstone", "Sepulchre", "Sphinx"]
 
-SPECIAL_ARTIFACT_NAMES = [
-    "Treasure of Polaris", "Slippers of Venus", "Radioactive Isotope", 
-    "Lesser of Two Evils", "Nebula Scroll Volume 1", "Nebula Scroll Volume 2", 
-    "Nebula Scroll Volume 3", "Nebula Scroll Volume 4", "Nebula Scroll Volume 5", 
-    "The Black Box"
-]
+# As per starweb-rules.txt
+SPECIAL_ARTIFACT_NAMES_AND_POINTS = {
+    "Treasure of Polaris": 20,
+    "Slippers of Venus": 10,
+    "Radioactive Isotope": -30,
+    "Lesser of Two Evils": -15,
+    "Nebula Scroll Volume 1": 0, # Points for Nebula Scrolls are often related to collecting the set
+    "Nebula Scroll Volume 2": 0,
+    "Nebula Scroll Volume 3": 0,
+    "Nebula Scroll Volume 4": 0,
+    "Nebula Scroll Volume 5": 0,
+    "The Black Box": 0 # The Black Box effect is special, not point-based initially
+}
 
 ALL_ARTIFACTS = []
-artifact_id_counter = 1
+artifact_id_counter = 1 # Start with V1
 
 # Create Standard Artifacts (90 total)
+# Standard artifacts are V1-V90
 for first_word in STANDARD_ARTIFACT_FIRST_WORDS:
-    if artifact_id_counter > 90: break
     for second_word in STANDARD_ARTIFACT_SECOND_WORDS:
-        if artifact_id_counter > 90: break
+        if artifact_id_counter > 90:
+            break # Should produce exactly 10 * 9 = 90 artifacts
+
         artifact_name = f"{first_word} {second_word}"
-        is_plastic_artifact = (first_word.upper() == "PLASTIC")
+        is_plastic_artifact = (first_word.lower() == "plastic") # Case-insensitive check for "Plastic"
         
-        # Simplified base points for demonstration; actual scoring is complex
-        points_val = -10 if is_plastic_artifact else 5 
+        points_val = -10 if is_plastic_artifact else 5
 
         ALL_ARTIFACTS.append(Artifact(
-            id=f"V{artifact_id_counter}",
+            id=f"V{artifact_id_counter}", # V1, V2, ..., V90
             name=artifact_name,
             points=points_val,
             is_plastic=is_plastic_artifact,
             category="Standard"
         ))
         artifact_id_counter += 1
+    if artifact_id_counter > 90:
+        break
 
-# Create Special Artifacts (10 total, ensuring artifact_id_counter continues to 100)
-# Points for special artifacts also vary. Using placeholder values.
-special_points = {
-    "Treasure of Polaris": 20, "Slippers of Venus": 10, "Radioactive Isotope": -30,
-    "Lesser of Two Evils": -15, "Nebula Scroll Volume 1": 0, "Nebula Scroll Volume 2": 0,
-    "Nebula Scroll Volume 3": 0, "Nebula Scroll Volume 4": 0, "Nebula Scroll Volume 5": 0,
-    "The Black Box": 0 
-}
-for name in SPECIAL_ARTIFACT_NAMES:
-    if artifact_id_counter > 100: break # Should be exactly 10 for 100 total
+# Create Special Artifacts (10 total)
+# Special artifacts are V91-V100
+for name, points_val in SPECIAL_ARTIFACT_NAMES_AND_POINTS.items():
+    if artifact_id_counter > 100: # Ensure we don't exceed V100
+        break 
+        
     ALL_ARTIFACTS.append(Artifact(
-        id=f"V{artifact_id_counter}",
+        id=f"V{artifact_id_counter}", # V91, V92, ..., V100
         name=name,
-        points=special_points.get(name, 0),
-        is_plastic=False, # None of the specials are plastic
-        category="Special"
+        points=points_val,
+        is_plastic=False, # None of the special artifacts are plastic
+        category="Special" # "GreatestTreasure" is not used here based on prompt, just "Special"
     ))
     artifact_id_counter += 1
 
@@ -301,6 +454,28 @@ class UnloadCargoOrder(Order):
         self.world_id = world_id
         self.metal_amount = metal_amount
         self.as_consumer_goods = as_consumer_goods
+
+class BuildOrder(Order):
+    """Represents a build order for a world."""
+    def __init__(self, world_id: int, build_type: str, quantity: int, 
+                 target_entity_id: int | None = None, migration_pop_type: str | None = None):
+        super().__init__(order_type="BUILD", priority=30)
+        self.world_id = world_id
+        self.build_type = build_type # "SHIP_FLEET", "SHIP_ISHOP", "SHIP_PSHIP", "INDUSTRY", "POP_LIMIT", "MIGRATE_POP", "ROBOTS"
+        self.quantity = quantity
+        self.target_entity_id = target_entity_id # For target_fleet_id or target_world_id
+        self.migration_pop_type = migration_pop_type # "NORMAL", "ROBOT", "CONVERT"
+
+class FireOrder(Order):
+    """Represents a fire order for a fleet."""
+    def __init__(self, firing_fleet_id: int, target_type: str, world_id: int, 
+                 target_id: int | None = None, is_conditional: bool = False):
+        super().__init__(order_type="FIRE", priority=50)
+        self.firing_fleet_id = firing_fleet_id
+        self.target_type = target_type  # "FLEET", "INDUSTRY", "POPULATION", "HOME_FLEETS"
+        self.world_id = world_id # Location of combat
+        self.target_id = target_id # Fleet ID if target_type is "FLEET"
+        self.is_conditional = is_conditional
 
 
 def stream_fleet(fleet):
@@ -537,6 +712,7 @@ class Game:
         self.fleets = fleets
         self.players = players
         self.turn_events: dict[str, list[str]] = {} # Key: player.user_id, Value: list of event message strings
+        self.turn_number = 0
 
     def add_turn_event(self, user_id_to_notify: str, message: str):
         if user_id_to_notify not in self.turn_events:
@@ -951,15 +1127,21 @@ class Game:
             return False, f"Fleet {fleet.name} (ID: {order.fleet_id}, owner: {fleet.owner.name if fleet.owner else 'N/A'}) cannot load from world {world.name} (ID: {order.world_id}, owner: {world.owner.name if world.owner else 'N/A'}) without loader status or matching ownership."
         
         is_merchant = False
-        if fleet.owner and fleet.owner.character_type == "Merchant":
-            is_merchant = True
+        # is_merchant = False # No longer needed directly here
+        # if fleet.owner and fleet.owner.character_type == "Merchant":
+        #     is_merchant = True
         
-        max_cargo_capacity = fleet.ships * (2 if is_merchant else 1)
+        # max_cargo_capacity = fleet.ships * (2 if is_merchant else 1) # Old calculation
+        max_cargo_capacity = fleet.get_max_cargo_capacity() # Use new method
         can_load_more = max_cargo_capacity - fleet.cargo
         if can_load_more < 0: can_load_more = 0 
 
-        if can_load_more == 0 and order.metal_amount != 0 :
-             return False, f"Fleet {fleet.name} (ID: {order.fleet_id}) is already full (capacity: {max_cargo_capacity}, current: {fleet.cargo})."
+        if can_load_more == 0 and order.metal_amount != 0 : # order.metal_amount can be -1 for "all"
+             if order.metal_amount != -1 : # If not trying to load all, and capacity is zero, then it's full.
+                return False, f"Fleet {fleet.name} (ID: {order.fleet_id}) is already full (capacity: {max_cargo_capacity}, current: {fleet.cargo})."
+             elif fleet.cargo >= max_cargo_capacity : # If trying to load "all" but already at/over capacity
+                return False, f"Fleet {fleet.name} (ID: {order.fleet_id}) is already at or over capacity (capacity: {max_cargo_capacity}, current: {fleet.cargo}). Cannot load more."
+
 
         amount_to_load: int
         if order.metal_amount == -1: # Load all possible
@@ -981,10 +1163,491 @@ class Game:
         # print(msg) # Server log
         return True, msg
 
+    def execute_fire_order(self, order: FireOrder, current_player: Player) -> tuple[bool, str]:
+        """Executes a FireOrder for the given player."""
+        if not isinstance(order, FireOrder):
+            return False, "Invalid order type provided to execute_fire_order."
+
+        firing_fleet = self.get_fleet(order.firing_fleet_id)
+        world = self.get_world(order.world_id)
+
+        if not firing_fleet:
+            return False, f"Fire Order Error: Firing fleet with ID {order.firing_fleet_id} not found."
+        if not world:
+            return False, f"Fire Order Error: World with ID {order.world_id} not found."
+        if firing_fleet.owner != current_player:
+            return False, f"Fire Order Error: Fleet {firing_fleet.name} (ID: {order.firing_fleet_id}) is not owned by player {current_player.name}."
+        if firing_fleet.location != world:
+            return False, f"Fire Order Error: Firing fleet {firing_fleet.name} is not at world {world.name} (ID: {order.world_id})."
+        if firing_fleet.is_at_peace:
+             return False, f"Fire Order Error: Firing fleet {firing_fleet.name} is at peace and cannot fire."
+
+
+        # Apostle Penalty
+        if current_player.character_type == "Apostle":
+            # current_player.victory_points -= 1 # Direct modification removed
+            if current_player.user_id not in self.turn_vp_adjustments: self.turn_vp_adjustments[current_player.user_id] = 0
+            self.turn_vp_adjustments[current_player.user_id] -= 1
+            self.add_turn_event(current_player.user_id, "Lost 1 VP (event) for initiating combat as Apostle.")
+
+
+        # Conditional Fire (Simplified: no firing for now)
+        if order.is_conditional:
+            return True, "Conditional fire order noted. Will not fire this turn under current simplified rules."
+
+        # Calculate Shots
+        num_effective_ships = firing_fleet.ships
+        if firing_fleet.owner.character_type == "Merchant":
+            # Merchants lose 1 shot per 1 metal they carry over their normal capacity (1 per ship)
+            # This means if a ship carries 2 metal, it's 1 metal overloaded and doesn't fire.
+            # If a ship carries 1 metal (normal capacity), it fires.
+            # If a ship carries 0 metal, it fires.
+            max_normal_cargo = firing_fleet.ships * 1 # Normal capacity is 1 metal per ship
+            if firing_fleet.cargo > max_normal_cargo:
+                # Each unit of metal above max_normal_cargo means one ship is fully dedicated to that extra cargo.
+                overloaded_by_cargo_units = firing_fleet.cargo - max_normal_cargo
+                # The number of ships that are "overloaded" and thus cannot fire is equal to this excess cargo count.
+                # However, a single ship can carry 2 units for a Merchant.
+                # If a merchant fleet of 10 ships has 15 cargo:
+                # Normal capacity = 10. Overloaded by 5 cargo units.
+                # This means 5 ships are carrying 2 units of cargo each (5*2=10 cargo).
+                # The other 5 ships are carrying 1 unit of cargo each (5*1=5 cargo). Total 15.
+                # The 5 ships carrying 2 units cannot fire. So, num_effective_ships = 10 - 5 = 5.
+                
+                # Simpler: number of ships that are carrying more than 1 unit of cargo.
+                # If total cargo is C and total ships is S.
+                # Each ship can carry 1 unit without penalty. C_normal = S.
+                # Cargo beyond this is C_extra = C - S.
+                # Each unit of C_extra must be carried by one of the S ships, making that ship carry 2 units.
+                # So, number of ships carrying 2 units = C_extra. These ships don't fire.
+                # num_effective_ships = S - C_extra = S - (C - S) = 2*S - C.
+                # This formula is valid if C <= 2*S. If C > 2*S, something is wrong with cargo loading.
+                # And C_extra should not exceed S (cannot have more double-loaded ships than total ships).
+                
+                ships_carrying_extra_load = 0
+                if firing_fleet.cargo > firing_fleet.ships: # If cargo exceeds 1 per ship
+                    ships_carrying_extra_load = firing_fleet.cargo - firing_fleet.ships
+                
+                num_effective_ships = firing_fleet.ships - ships_carrying_extra_load
+
+        num_shots = num_effective_ships
+        if num_shots <= 0:
+            return False, f"Fire Order Error: Fleet {firing_fleet.name} has no ships capable of firing (0 effective ships)."
+
+        # Targeting Logic
+        message_parts = [f"Fleet {firing_fleet.name} (Player {current_player.name}) fires {num_shots} shots at {world.name} targeting {order.target_type}."]
+        shots_remaining = num_shots # Keep track for multi-target types
+
+        if order.target_type == "FLEET":
+            if order.target_id is None:
+                return False, f"Fire Order Error (FLEET): No target_id specified for FLEET target type."
+            target_fleet = self.get_fleet(order.target_id)
+            if not target_fleet:
+                return False, f"Fire Order Error (FLEET): Target fleet with ID {order.target_id} not found."
+            if target_fleet.location != world:
+                return False, f"Fire Order Error (FLEET): Target fleet {target_fleet.name} is not at world {world.name}."
+            if target_fleet.owner == current_player: # Cannot target own fleet
+                 return False, f"Fire Order Error (FLEET): Cannot target own fleet {target_fleet.name}."
+            if target_fleet.is_at_peace: # Cannot target fleet at peace
+                 return False, f"Fire Order Error (FLEET): Cannot target fleet {target_fleet.name} as it is at peace."
+
+
+            hits_per_ship = 1 if target_fleet.cargo > 0 else 2
+            ships_destroyed_potential = num_shots // hits_per_ship
+            actual_ships_lost = min(ships_destroyed_potential, target_fleet.ships)
+            
+            target_fleet.ships -= actual_ships_lost
+            message_parts.append(f"Hit target fleet {target_fleet.name} (Owner: {target_fleet.owner.name if target_fleet.owner else 'Unowned'}), destroying {actual_ships_lost} ships.")
+
+            if target_fleet.ships <= 0:
+                original_owner_before_destruction = target_fleet.owner # Could be None already
+                target_fleet.owner = None # Becomes unowned (key)
+                message_parts.append(f"Target fleet {target_fleet.name} (ID: {target_fleet.id}) is now unowned.")
+                
+                if current_player.character_type == "Berserker" and original_owner_before_destruction is not None and original_owner_before_destruction != current_player:
+                    vp_gain = actual_ships_lost * 2
+                    # current_player.victory_points += vp_gain # Direct modification removed
+                    if current_player.user_id not in self.turn_vp_adjustments: self.turn_vp_adjustments[current_player.user_id] = 0
+                    self.turn_vp_adjustments[current_player.user_id] += vp_gain
+                    message_parts.append(f"Berserker {current_player.name} gained {vp_gain} VP (event) for destroying ships of fleet {target_fleet.name}.")
+                    self.add_turn_event(current_player.user_id, f"Gained {vp_gain} VP (event) for destroying ships of fleet {target_fleet.name}.")
+
+
+        elif order.target_type == "INDUSTRY":
+            # Target ISHIPS first, then Industry structures
+            iships_destroyed_potential = shots_remaining // 2
+            actual_iships_destroyed = min(world.iships, iships_destroyed_potential)
+            if actual_iships_destroyed > 0:
+                world.iships -= actual_iships_destroyed
+                shots_remaining -= actual_iships_destroyed * 2
+                message_parts.append(f"Destroyed {actual_iships_destroyed} ISHIPS at {world.name}.")
+
+            industry_destroyed_potential = shots_remaining // 2
+            actual_industry_destroyed = min(world.industry, industry_destroyed_potential)
+            if actual_industry_destroyed > 0:
+                world.industry -= actual_industry_destroyed
+                # shots_remaining -= actual_industry_destroyed * 2 # Not needed further for this target type
+                message_parts.append(f"Destroyed {actual_industry_destroyed} industry units at {world.name}.")
+            
+            if actual_iships_destroyed == 0 and actual_industry_destroyed == 0:
+                 message_parts.append(f"No ISHIPS or industry destroyed at {world.name} (either none present or insufficient shots).")
+
+
+        elif order.target_type == "POPULATION":
+            # Target PSHIPS first, then Population units
+            pships_destroyed_potential = shots_remaining // 2
+            actual_pships_destroyed = min(world.pships, pships_destroyed_potential)
+            if actual_pships_destroyed > 0:
+                world.pships -= actual_pships_destroyed
+                shots_remaining -= actual_pships_destroyed * 2
+                message_parts.append(f"Destroyed {actual_pships_destroyed} PSHIPS at {world.name}.")
+
+            # Now target population units (Normal, then Convert, then Robot)
+            population_killed_potential = shots_remaining // 2
+            
+            # Calculate total killable population
+            total_pop_units_at_world = world.population + world.convert_units + world.robot_units
+            actual_total_population_killed = min(total_pop_units_at_world, population_killed_potential)
+            
+            if actual_total_population_killed > 0:
+                killed_this_pass = 0
+                
+                # Kill Normal Population
+                killed_normal = min(world.population, actual_total_population_killed - killed_this_pass)
+                if killed_normal > 0:
+                    world.population -= killed_normal
+                    killed_this_pass += killed_normal
+                    message_parts.append(f"Killed {killed_normal} normal population at {world.name}.")
+
+                # Kill Convert Units (if still capacity to kill)
+                if killed_this_pass < actual_total_population_killed:
+                    killed_converts = min(world.convert_units, actual_total_population_killed - killed_this_pass)
+                    if killed_converts > 0:
+                        world.convert_units -= killed_converts
+                        killed_this_pass += killed_converts
+                        message_parts.append(f"Killed {killed_converts} convert units at {world.name}.")
+                        if world.convert_units == 0: world.converts_owner_id = None # If all converts of an apostle are gone
+
+                # Kill Robot Units (if still capacity to kill)
+                if killed_this_pass < actual_total_population_killed:
+                    killed_robots = min(world.robot_units, actual_total_population_killed - killed_this_pass)
+                    if killed_robots > 0:
+                        world.robot_units -= killed_robots
+                        # killed_this_pass += killed_robots # Not needed for further calculation
+                        message_parts.append(f"Killed {killed_robots} robot units at {world.name}.")
+                
+                # VP adjustments for population killed
+                if current_player.character_type == "Berserker":
+                    vp_change = actual_total_population_killed * 2
+                    # current_player.victory_points += vp_change # Direct modification removed
+                    if current_player.user_id not in self.turn_vp_adjustments: self.turn_vp_adjustments[current_player.user_id] = 0
+                    self.turn_vp_adjustments[current_player.user_id] += vp_change
+                    message_parts.append(f"Berserker {current_player.name} gained {vp_change} VP (event) for killing population.")
+                    self.add_turn_event(current_player.user_id, f"Gained {vp_change} VP (event) for killing population at {world.name}.")
+
+                else: # Non-Berserker firing at population
+                    vp_change = actual_total_population_killed * 1
+                    # current_player.victory_points -= vp_change # Direct modification removed
+                    if current_player.user_id not in self.turn_vp_adjustments: self.turn_vp_adjustments[current_player.user_id] = 0
+                    self.turn_vp_adjustments[current_player.user_id] -= vp_change
+                    message_parts.append(f"Player {current_player.name} lost {vp_change} VP (event) for killing population.")
+                    self.add_turn_event(current_player.user_id, f"Lost {vp_change} VP (event) for killing population at {world.name}.")
+
+
+            if actual_pships_destroyed == 0 and actual_total_population_killed == 0:
+                 message_parts.append(f"No PSHIPS or population units destroyed at {world.name} (either none present or insufficient shots).")
+        
+        elif order.target_type == "HOME_FLEETS":
+            # Target ISHIPS first
+            iships_destroyed_potential = shots_remaining // 2
+            actual_iships_destroyed = min(world.iships, iships_destroyed_potential)
+            if actual_iships_destroyed > 0:
+                world.iships -= actual_iships_destroyed
+                shots_remaining -= actual_iships_destroyed * 2
+                message_parts.append(f"Destroyed {actual_iships_destroyed} ISHIPS at {world.name}.")
+
+            # Then target PSHIPS
+            pships_destroyed_potential = shots_remaining // 2
+            actual_pships_destroyed = min(world.pships, pships_destroyed_potential)
+            if actual_pships_destroyed > 0:
+                world.pships -= actual_pships_destroyed
+                shots_remaining -= actual_pships_destroyed * 2 # Use up shots for PSHIPS
+                message_parts.append(f"Destroyed {actual_pships_destroyed} PSHIPS at {world.name}.")
+
+            # Check for world becoming unowned (key capture)
+            if world.iships == 0 and world.pships == 0 and shots_remaining >= 2: # Must have at least 2 shots left to neutralize
+                if world.owner is not None: # Only if it was owned
+                    message_parts.append(f"World {world.name} (ID: {world.id}) has been neutralized and is now unowned.")
+                    world.owner = None
+                    world.turns_owned = 0 # Reset turns_owned
+                    # Any population/robots/converts remain for now. Conquest logic is separate.
+                else:
+                    message_parts.append(f"World {world.name} (ID: {world.id}) home fleets destroyed, was already unowned.")
+            
+            if actual_iships_destroyed == 0 and actual_pships_destroyed == 0:
+                 message_parts.append(f"No ISHIPS or PSHIPS destroyed at {world.name} (either none present or insufficient shots).")
+
+        else:
+            return False, f"Fire Order Error: Unknown target_type '{order.target_type}'."
+
+        return True, " ".join(message_parts)
+
+
+    def execute_build_order(self, order: BuildOrder, current_player: Player) -> tuple[bool, str]:
+        """Executes a BuildOrder for the given player."""
+        if not isinstance(order, BuildOrder):
+            return False, "Invalid order type provided to execute_build_order."
+
+        world = self.get_world(order.world_id)
+        if not world:
+            return False, f"Build Order Error: World with ID {order.world_id} not found."
+
+        if world.owner != current_player:
+            return False, f"Build Order Error: Player {current_player.name} does not own World {world.name} (ID: {world.id})."
+
+        if world.is_black_hole:
+            return False, f"Build Order Error: Cannot build in Black Hole {world.name} (ID: {world.id})."
+
+        # Resource availability and costs will be handled per build_type
+        # order.quantity is the number of items to build or units to affect.
+
+        if order.build_type == "SHIP_FLEET":
+            cost_metal_per_ship = 1
+            cost_pop_per_ship = 1
+            # Industry capacity required is 1 per ship, but industry itself is not "consumed" like metal/pop.
+            # The check is against available world.industry.
+            
+            required_metal = order.quantity * cost_metal_per_ship
+            required_pop = order.quantity * cost_pop_per_ship
+            required_industry_capacity = order.quantity 
+
+            if order.quantity <= 0:
+                return False, f"Build Order Error (SHIP_FLEET): Quantity must be positive. Got {order.quantity}."
+            if world.stockpile < required_metal:
+                return False, f"Build Order Error (SHIP_FLEET): Not enough metal at {world.name}. Has {world.stockpile}, needs {required_metal}."
+            if world.population < required_pop:
+                return False, f"Build Order Error (SHIP_FLEET): Not enough population at {world.name}. Has {world.population}, needs {required_pop}."
+            if world.industry < required_industry_capacity:
+                return False, f"Build Order Error (SHIP_FLEET): Not enough industry capacity at {world.name}. Has {world.industry}, needs {required_industry_capacity}."
+
+            target_fleet = self.get_fleet(order.target_entity_id)
+            if not target_fleet:
+                return False, f"Build Order Error (SHIP_FLEET): Target fleet with ID {order.target_entity_id} not found."
+            if target_fleet.location != world:
+                return False, f"Build Order Error (SHIP_FLEET): Target fleet {target_fleet.name} is not at world {world.name}."
+            if target_fleet.owner != current_player:
+                return False, f"Build Order Error (SHIP_FLEET): Target fleet {target_fleet.name} is not owned by player {current_player.name}."
+
+            world.stockpile -= required_metal
+            world.population -= required_pop
+            # world.industry is "used" for this turn's capacity, not permanently reduced.
+            target_fleet.ships += order.quantity
+            return True, f"Successfully built {order.quantity} ships for fleet {target_fleet.name} at {world.name}."
+
+        elif order.build_type == "SHIP_ISHOP" or order.build_type == "SHIP_PSHIP":
+            cost_metal_per_ship = 1
+            cost_pop_per_ship = 1
+            required_industry_capacity = order.quantity
+
+            if order.quantity <= 0:
+                return False, f"Build Order Error ({order.build_type}): Quantity must be positive. Got {order.quantity}."
+
+            required_metal = order.quantity * cost_metal_per_ship
+            required_pop = order.quantity * cost_pop_per_ship
+            
+            if world.stockpile < required_metal:
+                return False, f"Build Order Error ({order.build_type}): Not enough metal at {world.name}. Has {world.stockpile}, needs {required_metal}."
+            if world.population < required_pop:
+                return False, f"Build Order Error ({order.build_type}): Not enough population at {world.name}. Has {world.population}, needs {required_pop}."
+            if world.industry < required_industry_capacity:
+                return False, f"Build Order Error ({order.build_type}): Not enough industry capacity at {world.name}. Has {world.industry}, needs {required_industry_capacity}."
+
+            world.stockpile -= required_metal
+            world.population -= required_pop
+            
+            if order.build_type == "SHIP_ISHOP":
+                world.iships += order.quantity
+                return True, f"Successfully built {order.quantity} ISHIPS at {world.name}."
+            else: # SHIP_PSHIP
+                world.pships += order.quantity
+                return True, f"Successfully built {order.quantity} PSHIPS at {world.name}."
+
+        elif order.build_type == "INDUSTRY":
+            is_empire_builder = current_player.character_type == "Empire Builder"
+            cost_per_unit = 4 if is_empire_builder else 5
+            
+            if order.quantity <= 0:
+                return False, f"Build Order Error (INDUSTRY): Quantity must be positive. Got {order.quantity}."
+
+            needed_metal = order.quantity * cost_per_unit
+            needed_pop = order.quantity * cost_per_unit
+            needed_acting_industry = order.quantity * cost_per_unit # Existing industry needed to build more
+
+            if world.stockpile < needed_metal:
+                return False, f"Build Order Error (INDUSTRY): Not enough metal at {world.name}. Has {world.stockpile}, needs {needed_metal}."
+            if world.population < needed_pop:
+                return False, f"Build Order Error (INDUSTRY): Not enough population at {world.name}. Has {world.population}, needs {needed_pop}."
+            if world.industry < needed_acting_industry: # Check if current industry can support building this much new industry
+                return False, f"Build Order Error (INDUSTRY): Not enough existing industry capacity at {world.name}. Has {world.industry}, needs {needed_acting_industry} to build {order.quantity} new units."
+
+            world.stockpile -= needed_metal
+            world.population -= needed_pop
+            # world.industry capacity is "used", not consumed like stockpile/pop.
+            world.industry += order.quantity
+            return True, f"Successfully built {order.quantity} industry units at {world.name}."
+
+        elif order.build_type == "POP_LIMIT":
+            is_empire_builder = current_player.character_type == "Empire Builder"
+            cost_per_unit_increase = 4 if is_empire_builder else 5 # Assuming same cost scaling as industry
+
+            if order.quantity <= 0: # Quantity here means how much to increase the pop limit by
+                return False, f"Build Order Error (POP_LIMIT): Increase quantity must be positive. Got {order.quantity}."
+
+            needed_metal = order.quantity * cost_per_unit_increase
+            needed_pop = order.quantity * cost_per_unit_increase
+            needed_acting_industry = order.quantity * cost_per_unit_increase
+
+            if world.stockpile < needed_metal:
+                return False, f"Build Order Error (POP_LIMIT): Not enough metal at {world.name}. Has {world.stockpile}, needs {needed_metal}."
+            if world.population < needed_pop:
+                return False, f"Build Order Error (POP_LIMIT): Not enough population at {world.name}. Has {world.population}, needs {needed_pop}."
+            if world.industry < needed_acting_industry:
+                return False, f"Build Order Error (POP_LIMIT): Not enough existing industry capacity at {world.name}. Has {world.industry}, needs {needed_acting_industry}."
+            
+            world.stockpile -= needed_metal
+            world.population -= needed_pop
+            world.max_population += order.quantity
+            return True, f"Successfully increased max population by {order.quantity} at {world.name}. New max: {world.max_population}."
+
+        elif order.build_type == "MIGRATE_POP":
+            cost_metal_per_unit = 1
+            cost_industry_per_unit = 1 # Industry capacity used
+
+            if order.quantity <= 0:
+                return False, f"Build Order Error (MIGRATE_POP): Quantity must be positive. Got {order.quantity}."
+            
+            needed_metal = order.quantity * cost_metal_per_unit
+            needed_industry_capacity = order.quantity * cost_industry_per_unit
+
+            if world.stockpile < needed_metal:
+                return False, f"Build Order Error (MIGRATE_POP): Not enough metal at {world.name}. Has {world.stockpile}, needs {needed_metal}."
+            if world.industry < needed_industry_capacity:
+                 return False, f"Build Order Error (MIGRATE_POP): Not enough industry capacity at {world.name}. Has {world.industry}, needs {needed_industry_capacity}."
+
+            target_world = self.get_world(order.target_entity_id)
+            if not target_world:
+                return False, f"Build Order Error (MIGRATE_POP): Target world with ID {order.target_entity_id} not found."
+            if target_world.is_black_hole:
+                return False, f"Build Order Error (MIGRATE_POP): Cannot migrate population to Black Hole {target_world.name}."
+            if target_world not in world.connections and world not in target_world.connections : # Check direct connection
+                return False, f"Build Order Error (MIGRATE_POP): World {world.name} is not connected to target world {target_world.name}."
+
+            source_pop_count = 0
+            if order.migration_pop_type == "NORMAL":
+                source_pop_count = world.population
+            elif order.migration_pop_type == "ROBOT":
+                source_pop_count = world.robot_units
+            elif order.migration_pop_type == "CONVERT":
+                source_pop_count = world.convert_units
+                if world.converts_owner_id != current_player.user_id: # Must be player's own converts
+                     return False, f"Build Order Error (MIGRATE_POP): Player {current_player.name} cannot migrate converts they do not control at {world.name}."
+            else:
+                return False, f"Build Order Error (MIGRATE_POP): Invalid migration_pop_type '{order.migration_pop_type}'."
+
+            if source_pop_count < order.quantity:
+                return False, f"Build Order Error (MIGRATE_POP): Insufficient {order.migration_pop_type} population at {world.name}. Has {source_pop_count}, needs {order.quantity}."
+
+            # Check target world capacity
+            if order.migration_pop_type == "NORMAL" and target_world.population + order.quantity > target_world.max_population:
+                return False, f"Build Order Error (MIGRATE_POP): Target world {target_world.name} does not have enough max population capacity for {order.quantity} new NORMAL population."
+            # Robot and Convert migrations don't check max_population of target world as per typical game rules.
+
+            # Consume resources from source world
+            world.stockpile -= needed_metal
+            # world.industry capacity used
+
+            # Move population
+            if order.migration_pop_type == "NORMAL":
+                world.population -= order.quantity
+                target_world.population += order.quantity
+            elif order.migration_pop_type == "ROBOT":
+                world.robot_units -= order.quantity
+                target_world.robot_units += order.quantity
+                # If robots move to a world not owned by the current player, ownership dynamics might apply (later feature)
+            elif order.migration_pop_type == "CONVERT":
+                world.convert_units -= order.quantity
+                
+                # If target world is unowned by an apostle or owned by a different apostle, current player's converts take over/establish.
+                if target_world.converts_owner_id != current_player.user_id:
+                    target_world.converts_owner_id = current_player.user_id
+                    target_world.convert_units = order.quantity # New converts replace any existing ones of a different apostle
+                else: # Target world already has converts of the current player
+                    target_world.convert_units += order.quantity
+            
+            return True, f"Successfully migrated {order.quantity} {order.migration_pop_type} population from {world.name} to {target_world.name}."
+
+        elif order.build_type == "ROBOTS": # Build new robots
+            if current_player.character_type != "Berserker":
+                return False, f"Build Order Error (ROBOTS): Only Berserkers can build robots. Player {current_player.name} is a {current_player.character_type}."
+            
+            # World must be robot-controlled by this player
+            is_robot_controlled_by_player = (
+                world.robot_units > 0 and 
+                world.population == 0 and 
+                world.convert_units == 0 and 
+                world.owner == current_player
+            )
+            if not is_robot_controlled_by_player:
+                return False, f"Build Order Error (ROBOTS): World {world.name} is not robot-controlled by player {current_player.name} (needs: robots > 0, pop == 0, converts == 0)."
+
+            # Cost: 1 industry & 1 metal makes 2 robots. Order.quantity is the amount of "pairs" or "sets" to build.
+            # So, if order.quantity is 1, it means 1 unit of industry and 1 unit of metal are used to make 2 robots.
+            if order.quantity <= 0:
+                return False, f"Build Order Error (ROBOTS): Quantity (of build effort) must be positive. Got {order.quantity}."
+
+            cost_metal_per_effort = 1
+            cost_industry_capacity_per_effort = 1
+            robots_built_per_effort = 2
+            # Existing robots needed to operate the industry
+            robots_operating_industry_per_effort = 1 
+
+            needed_metal = order.quantity * cost_metal_per_effort
+            needed_industry_capacity = order.quantity * cost_industry_capacity_per_effort
+            needed_robot_operators = order.quantity * robots_operating_industry_per_effort
+            
+            num_robots_to_build = order.quantity * robots_built_per_effort
+
+            if world.stockpile < needed_metal:
+                return False, f"Build Order Error (ROBOTS): Not enough metal at {world.name}. Has {world.stockpile}, needs {needed_metal}."
+            if world.industry < needed_industry_capacity:
+                 return False, f"Build Order Error (ROBOTS): Not enough industry capacity at {world.name}. Has {world.industry}, needs {needed_industry_capacity}."
+            if world.robot_units < needed_robot_operators: # Check if enough existing robots to do the work
+                 return False, f"Build Order Error (ROBOTS): Not enough existing robots to operate industry at {world.name}. Has {world.robot_units}, needs {needed_robot_operators} for this build quantity."
+            
+            world.stockpile -= needed_metal
+            # world.industry capacity used
+            # world.robot_units used for operation are not "consumed" from world.robot_units, they are just busy.
+            world.robot_units += num_robots_to_build
+            return True, f"Successfully built {num_robots_to_build} robots at {world.name}."
+
+        else:
+            return False, f"Build Order Error: Unknown build_type '{order.build_type}'."
+
+
     def process_turn(self, user_id: str, raw_orders_list: list[dict]) -> list[str]:
         """Processes a list of raw order dictionaries for a turn, for a given user."""
-        print(f"Processing turn for user: {user_id}") # Log the user processing the turn
+        self.turn_number += 1
+        print(f"Processing Turn {self.turn_number} for user: {user_id}")
         
+        # Initialize turn-specific VP adjustments
+        self.turn_vp_adjustments: dict[str, int] = {}
+
+        current_player_object = next((p for p in self.players if p.user_id == user_id), None)
+        if not current_player_object:
+            # This case should ideally be prevented by @login_required and game setup
+            # Or if an admin is somehow submitting turns for a non-existent player.
+            return [f"Critical Error: Player object not found for user_id {user_id}. Cannot process turn."]
+
         typed_orders: list[Order] = []
         for order_dict in raw_orders_list:
             order_obj = order_from_dict(order_dict) # Uses the global helper
@@ -999,18 +1662,243 @@ class Game:
         for order_obj in typed_orders:
             success = False
             message = "Unknown order type or execution error."
+            
             # Dispatch to the correct execute_* method based on order_type
-            if order_obj.order_type == "MOVE":
+            if isinstance(order_obj, MoveOrder): # Use isinstance for clarity
                 success, message = self.execute_move_order(order_obj)
-            elif order_obj.order_type == "TRANSFER":
+            elif isinstance(order_obj, TransferOrder):
                 success, message = self.execute_transfer_order(order_obj)
-            elif order_obj.order_type == "LOAD_CARGO":
+            elif isinstance(order_obj, LoadCargoOrder):
                 success, message = self.execute_load_cargo_order(order_obj)
-            elif order_obj.order_type == "UNLOAD_CARGO":
+            elif isinstance(order_obj, UnloadCargoOrder):
                 success, message = self.execute_unload_cargo_order(order_obj)
+            elif isinstance(order_obj, BuildOrder):
+                success, message = self.execute_build_order(order_obj, current_player_object)
+            else:
+                # This path should ideally not be reached if order_from_dict is comprehensive
+                message = f"Order type {type(order_obj).__name__} not recognized by process_turn."
             
             results_messages.append(f"Order ({order_obj.order_type} P{order_obj.priority}): {message} (Success: {success})")
         
+        # --- Metal Production Phase ---
+        # This should happen after all orders that might consume stockpile or affect mines/population.
+        # For simplicity, doing it after all player orders for this turn.
+        # A more complex turn sequence might have it at a specific phase relative to other game events.
+        for world in self.worlds:
+            if world.owner and not world.is_black_hole: # Only owned, non-black hole worlds produce
+                pop_for_mining = 0
+                if world.robot_units > 0 and world.population == 0 and world.convert_units == 0 : # Robot-controlled world
+                    pop_for_mining = world.robot_units
+                elif world.robot_units == 0 and world.convert_units == 0: # Normal population controlled world
+                     pop_for_mining = world.population
+                # else: mixed population, or convert-controlled worlds don't run mines as per rules.
+                
+                if pop_for_mining > 0 and world.mines > 0:
+                    produced_metal = min(world.mines, pop_for_mining)
+                    old_stockpile = world.stockpile
+                    world.stockpile = min(world.stockpile + produced_metal, 255) # Cap stockpile at 255
+                    if world.stockpile > old_stockpile :
+                         # Only log if metal was actually added (relevant if already at cap)
+                        production_msg = f"World {world.name} (ID: {world.id}, Owner: {world.owner.name}) produced {world.stockpile - old_stockpile} metal. New stockpile: {world.stockpile}."
+                        # This message is for server log for now, could be an event for player.
+                        print(production_msg) 
+                        # self.add_turn_event(world.owner.user_id, production_msg) # If players should be notified
+
+        # --- Metal Production Phase --- (Already done)
+        # ...
+
+        # --- Population Growth Phase ---
+        print(f"Turn {self.turn_number}: Starting Population Growth Phase for player {current_player_object.name}...")
+        for world in self.worlds:
+            if world.owner and world.owner == current_player_object and not world.is_black_hole: # Process growth only for current player's worlds
+                # Plunder check would go here: if world.is_recovering_from_plunder: continue
+
+                if world.robot_units > 0: # Robots don't grow naturally
+                    pass # No natural growth for robots
+                else: # Normal or Convert populations
+                    current_total_pop = world.population + world.convert_units
+                    
+                    if current_total_pop >= world.max_population:
+                        continue # No room to grow
+
+                    base_growth = (world.population + world.convert_units) // 10
+                    if base_growth == 0 and current_total_pop > 0 and current_total_pop < world.max_population:
+                        base_growth = 1 # Ensure at least 1 growth if pop > 0, < 10 and space exists
+
+                    potential_new_total_pop = current_total_pop + base_growth
+                    actual_growth = base_growth if potential_new_total_pop <= world.max_population else world.max_population - current_total_pop
+
+                    if actual_growth <= 0:
+                        continue
+
+                    growth_message_parts = [f"World {world.name} (ID: {world.id})"]
+                    if world.owner.character_type == "Apostle":
+                        original_pop = world.population
+                        original_converts = world.convert_units
+
+                        # Try to convert existing normal population first
+                        converts_from_normal = min(actual_growth, world.population)
+                        if converts_from_normal > 0:
+                            world.population -= converts_from_normal
+                            world.convert_units += converts_from_normal
+                            growth_message_parts.append(f"converted {converts_from_normal} normal pop to converts.")
+                        
+                        # If more growth capacity remains, add new converts
+                        remaining_growth_capacity = actual_growth - converts_from_normal
+                        if remaining_growth_capacity > 0:
+                            world.convert_units += remaining_growth_capacity
+                            growth_message_parts.append(f"grew {remaining_growth_capacity} new converts.")
+                        
+                        world.converts_owner_id = world.owner.user_id # Ensure owner ID is set
+                        if world.population != original_pop or world.convert_units != original_converts:
+                             self.add_turn_event(world.owner.user_id, f"{' '.join(growth_message_parts)} New totals: Pop {world.population}, Converts {world.convert_units}.")
+
+                    else: # Owner is not Apostle
+                        world.population += actual_growth
+                        self.add_turn_event(world.owner.user_id, f"World {world.name} (ID: {world.id}) population grew by {actual_growth}. New population: {world.population}.")
+                    
+                    # Ensure consistency (should be guaranteed by logic above but as a safeguard)
+                    if world.population + world.convert_units > world.max_population:
+                        # This case should ideally not be hit if logic is correct
+                        print(f"Warning: Pop growth exceeded max_population for world {world.id}. Correcting.")
+                        if world.owner.character_type == "Apostle":
+                             # Prioritize converts if overflown, remove from normal pop first if mixed.
+                             # This part of correction might need more nuanced rules if hit.
+                             overflow = (world.population + world.convert_units) - world.max_population
+                             world.convert_units -= overflow # Simplistic correction
+                        else:
+                            world.population = world.max_population - world.convert_units # Assumes converts are 0 for non-apostles
+
+        # --- World and Key Capture Logic ---
+        # This should run *after* all orders for the turn, including combat and movement.
+        self.resolve_world_and_key_capture() # This now also includes turns_owned/mine_increase at its end
+
+        # --- Final Player VP Update Phase ---
+        print(f"Turn {self.turn_number}: Final VP Update Phase for player {current_player_object.name}...")
+        # This part should iterate over ALL players if process_turn becomes a global EOT function.
+        # For now, it correctly processes for the current_user_id who submitted the turn.
+        # If multiple players submit turns in a "round", this VP calculation will reflect their state
+        # after their orders and subsequent growth/capture phases.
+        
+        # Calculate base VPs from character type (based on current game state)
+        base_turn_vp = current_player_object.character.calculate_victory_points(self)
+        
+        # Get event VPs accumulated during this player's order processing
+        event_vp = self.turn_vp_adjustments.get(current_player_object.user_id, 0)
+        
+        current_player_object.victory_points = base_turn_vp + event_vp
+        
+        vp_update_msg = (
+            f"End of Turn {self.turn_number} for {current_player_object.name}: "
+            f"Base VP: {base_turn_vp}, Event VP: {event_vp}, Total VP: {current_player_object.victory_points}."
+        )
+        self.add_turn_event(current_player_object.user_id, vp_update_msg)
+        print(vp_update_msg) # Server log
+
+        return results_messages
+    
+    def resolve_world_and_key_capture(self):
+        """Resolves world ownership and capture of unowned fleets (keys) based on presence.
+           Also handles end-of-turn mine increases."""
+        print(f"Turn {self.turn_number}: Resolving world/key capture and mine increases...")
+
+        # World Capture
+        for world in self.worlds:
+            if world.is_black_hole:
+                continue
+
+            # Fleets that can exert control: has ships, not at peace, and owned by a player
+            eligible_fleets_present = [
+                f for f in self.fleets 
+                if f.location == world and f.ships > 0 and not f.is_at_peace and f.owner is not None
+            ]
+
+            if not eligible_fleets_present:
+                # If no eligible fleets, current owner retains control unless the world is truly empty
+                # and was made unowned by combat (e.g. HOME_FLEETS target).
+                # If world.owner is None (e.g. from combat), it remains None.
+                # If world has defenses (iships, pships, pop etc.) it can defend itself if owner is present.
+                # This part is simplified: if no one is there to challenge, owner keeps it.
+                # A world becoming unowned due to combat is handled by execute_fire_order.
+                continue 
+            
+            # Get set of unique player objects who have eligible fleets at the world
+            owners_present_objects = {f.owner for f in eligible_fleets_present} # Set of Player objects
+
+            if len(owners_present_objects) == 1:
+                new_potential_owner = owners_present_objects.pop() # The Player object
+
+                # Check for capturing from an ally
+                is_capturing_from_ally = False
+                if world.owner and world.owner != new_potential_owner: # If there's a different current owner
+                    if world.owner.user_id in new_potential_owner.allies or new_potential_owner.user_id in world.owner.allies:
+                        is_capturing_from_ally = True
+                
+                if not is_capturing_from_ally:
+                    if world.owner != new_potential_owner:
+                        capture_msg = f"World {world.name} (ID: {world.id}) captured by {new_potential_owner.name} from {world.owner.name if world.owner else 'Unowned'}."
+                        print(capture_msg)
+                        if world.owner: # Notify old owner if existed
+                            self.add_turn_event(world.owner.user_id, f"You lost control of world {world.name} (ID: {world.id}) to {new_potential_owner.name}.")
+                        self.add_turn_event(new_potential_owner.user_id, f"You captured world {world.name} (ID: {world.id}) from {world.owner.name if world.owner else 'Unowned'}.")
+                        
+                        world.owner = new_potential_owner
+                        world.turns_owned = 1 # Reset turns owned for new owner
+                        # Reset convert units if captured by non-apostle or different apostle
+                        if new_potential_owner.character_type != "Apostle" or world.converts_owner_id != new_potential_owner.user_id:
+                            if world.convert_units > 0:
+                                world.convert_units = 0
+                                world.converts_owner_id = None
+                                self.add_turn_event(new_potential_owner.user_id, f"Any convert units at {world.name} were disbanded upon capture.")
+                else:
+                    # Log attempt to capture from ally
+                    print(f"Player {new_potential_owner.name} fleet at {world.name} but world is owned by ally {world.owner.name}. No capture.")
+                    self.add_turn_event(new_potential_owner.user_id, f"Your fleet at {world.name} did not capture it as it's owned by your ally {world.owner.name}.")
+
+
+            # Else (multiple owners present, or no owners with fleets and world was already unowned): ownership doesn't change from this phase.
+            # Combat might have already made it unowned.
+
+        # Loose Key (Unowned Fleet) Capture
+        for key_fleet in self.fleets:
+            # Candidate for capture: unowned fleet with 0 ships, at a non-black hole world
+            if key_fleet.owner is None and key_fleet.ships == 0 and key_fleet.location and not key_fleet.location.is_black_hole:
+                world_of_key = key_fleet.location
+                
+                eligible_capturing_fleets_at_key_loc = [
+                    f for f in self.fleets 
+                    if f.location == world_of_key and f.ships > 0 and not f.is_at_peace and f.owner is not None
+                ]
+                
+                capturing_owners_objects = {f.owner for f in eligible_capturing_fleets_at_key_loc} # Set of Player objects
+
+                if len(capturing_owners_objects) == 1:
+                    new_owner_of_key = capturing_owners_objects.pop() # The Player object
+                    
+                    # No direct check for "capturing key from ally" as keys are unowned.
+                    # The implicit rule is that if an ally is the only one who could capture it, they get it.
+                    # If multiple non-allied players could, it remains unowned. (Handled by len(capturing_owners_objects) == 1)
+
+                    key_fleet.owner = new_owner_of_key
+                    key_capture_msg = f"Unowned fleet key {key_fleet.name} (ID: {key_fleet.id}) at {world_of_key.name} now owned by {new_owner_of_key.name}."
+                    print(key_capture_msg)
+                    self.add_turn_event(new_owner_of_key.user_id, f"You acquired unowned fleet key {key_fleet.name} (ID: {key_fleet.id}) at {world_of_key.name}.")
+                    # Artifacts on the key_fleet are now implicitly owned by new_owner_of_key.
+        
+        # --- Turns Owned & Mine Increase Phase (Moved to very end) ---
+        for world in self.worlds:
+            if world.owner and not world.is_black_hole:
+                world.turns_owned += 1
+                if world.turns_owned == 8:
+                    world.turns_owned = 1 
+                    if world.mines > 0 and world.mines < 30: # Max mines strictly 30
+                        world.mines += 1
+                        mine_increase_msg = f"World {world.name} (ID: {world.id}, Owner: {world.owner.name}) increased mines to {world.mines} due to sustained ownership."
+                        print(mine_increase_msg)
+                        if world.owner: # Should always be true here
+                             self.add_turn_event(world.owner.user_id, mine_increase_msg)
+
+
         return results_messages
 
 
@@ -1024,7 +1912,21 @@ def order_from_dict(order_dict: dict) -> Order | None:
     data = {k: v for k, v in order_dict.items() if k != 'order_type'}
 
     try:
-        if order_type == "MOVE":
+        if order_type == "BUILD":
+            # Ensure quantity is int. target_entity_id can be None.
+            data['quantity'] = int(data['quantity'])
+            if 'target_entity_id' in data and data['target_entity_id'] is not None:
+                data['target_entity_id'] = int(data['target_entity_id'])
+            return BuildOrder(**data)
+        elif order_type == "FIRE":
+            data['firing_fleet_id'] = int(data['firing_fleet_id'])
+            data['world_id'] = int(data['world_id'])
+            if 'target_id' in data and data['target_id'] is not None:
+                data['target_id'] = int(data['target_id'])
+            if 'is_conditional' in data: # Should be boolean
+                 data['is_conditional'] = bool(data['is_conditional'])
+            return FireOrder(**data)
+        elif order_type == "MOVE":
             # Ensure target_world_ids is a list and contains only non-null integers
             raw_ids = data.get('target_world_ids', [])
             if not isinstance(raw_ids, list): # Should be a list from JS
@@ -1083,7 +1985,10 @@ def create_game():
             industry=random.randint(0, 5),
             mines=random.randint(0, 3),
             stockpile=random.randint(0, 50),
-            artifacts=[] # Initialized as empty list
+            artifacts=[], # Initialized as empty list
+            robot_units=0, # Standard worlds start with no robots
+            convert_units=0, # Standard worlds start with no converts
+            converts_owner_id=None
         )
         new_game.worlds.append(world)
 
@@ -1121,6 +2026,32 @@ def create_game():
     # as this setup is for a large, initially unowned universe.
     # new_game.players will remain empty or be handled by a separate mechanism.
     # The old player assignment logic from previous create_game is omitted here.
+
+    # Initialize black holes (example: 5% chance for any world to be a black hole)
+    # This should be done after worlds are created.
+    for world_obj in new_game.worlds:
+        if random.random() < 0.05: # 5% chance
+            world_obj.is_black_hole = True
+            # Potentially modify other attributes for black holes, e.g., no population, no owner
+            world_obj.owner = None
+            world_obj.population = 0
+            world_obj.max_population = 0
+            world_obj.industry = 0
+            world_obj.mines = 0
+            world_obj.stockpile = 0
+            world_obj.iships = 0
+            world_obj.pships = 0
+            world_obj.artifacts = [] # Black holes probably don't have artifacts
+            world_obj.robot_units = 0 # Black holes don't have robots
+            world_obj.convert_units = 0 # Black holes don't have converts
+            world_obj.converts_owner_id = None
+            world_obj.name = f"Black Hole W{world_obj.id}" # Rename for clarity
+            # Black holes might not have connections, or limited/special connections.
+            # For now, connect_all_worlds might connect them. This may need adjustment.
+            # If black holes should not be connected, their connections list should be cleared
+            # AFTER connect_all_worlds, or connect_all_worlds should be made aware of them.
+            # For simplicity, let's assume they can be part of the network for now,
+            # but their properties make them undesirable/dangerous.
 
     return new_game
 
@@ -1204,7 +2135,11 @@ def assign_homeworld_to_player(player_obj: Player, game_instance: Game):
     selected_homeworld.stockpile = 30
     selected_homeworld.iships = 1
     selected_homeworld.pships = 1
-    # selected_homeworld.turns_owned = 1 # If 'turns_owned' attribute exists
+    selected_homeworld.turns_owned = 1 # Initialize to 1 as it's now owned
+    selected_homeworld.robot_units = 0 # Homeworlds start with no robots
+    selected_homeworld.convert_units = 0 # Homeworlds start with no converts
+    selected_homeworld.converts_owner_id = None # Homeworlds start with no apostle converts
+    # selected_homeworld.is_black_hole remains False by default for homeworlds
     # Ensure connections made by connect_all_worlds are preserved.
     
     player_obj.home_world = selected_homeworld

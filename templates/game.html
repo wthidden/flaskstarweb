@@ -144,25 +144,6 @@
     <p>No fleets in the game.</p>
     {% endif %}
 
-    <h2>Move Fleet</h2>
-    <form action="{{ url_for('move_fleet') }}" method="post">
-        <div>
-            <label for="fleet_id">Fleet ID to Move:</label>
-            <input type="text" id="fleet_id" name="fleet_id" required>
-        </div>
-        <div>
-            <label for="world1_id">Destination World 1 ID:</label>
-            <input type="text" id="world1_id" name="world1_id" required>
-        </div>
-        <div>
-            <label for="world2_id">Destination World 2 ID (Optional):</label>
-            <input type="text" id="world2_id" name="world2_id">
-        </div>
-        <div>
-            <button type="submit">Move Fleet</button>
-        </div>
-    </form>
-
     <hr>
 
     <h2>Plan Your Turn</h2>
@@ -176,6 +157,8 @@
                 <option value="TRANSFER">Transfer Ships</option>
                 <option value="LOAD_CARGO">Load Cargo</option>
                 <option value="UNLOAD_CARGO">Unload Cargo</option>
+                <option value="BUILD">Build</option>
+                <option value="FIRE">Fire</option>
             </select>
         </div>
 
@@ -234,6 +217,51 @@
             <input type="checkbox" id="unloadAsCG"><br>
         </div>
 
+        <div id="buildInputs" class="order-inputs" style="display: none;">
+            <h4>Build Order</h4>
+            <label for="buildWorldId">World ID to Build At:</label>
+            <input type="number" id="buildWorldId" placeholder="World ID"><br>
+            <label for="buildTypeSelect">Build Type:</label>
+            <select id="buildTypeSelect">
+                <option value="SHIP_FLEET">Ships for Fleet</option>
+                <option value="SHIP_ISHOP">ISHIPs</option>
+                <option value="SHIP_PSHIP">PSHIPs</option>
+                <option value="INDUSTRY">Industry</option>
+                <option value="POP_LIMIT">Population Limit</option>
+                <option value="MIGRATE_POP">Migrate Population</option>
+                <option value="ROBOTS">Robots (Berserker)</option>
+            </select><br>
+            <label for="buildQuantity">Quantity:</label>
+            <input type="number" id="buildQuantity" placeholder="Amount"><br>
+            <label for="buildTargetEntityId">Target Fleet/World ID (Optional):</label>
+            <input type="number" id="buildTargetEntityId" placeholder="Target ID"><br>
+            <label for="buildMigrationPopType">Migration Population Type (Optional):</label>
+            <select id="buildMigrationPopType">
+                <option value="NORMAL">Normal</option>
+                <option value="ROBOT">Robot</option>
+                <option value="CONVERT">Convert</option>
+            </select><br>
+        </div>
+
+        <div id="fireInputs" class="order-inputs" style="display: none;">
+            <h4>Fire Order</h4>
+            <label for="fireFiringFleetId">Firing Fleet ID:</label>
+            <input type="number" id="fireFiringFleetId" placeholder="Fleet ID"><br>
+            <label for="fireWorldId">World ID of Combat:</label>
+            <input type="number" id="fireWorldId" placeholder="World ID"><br>
+            <label for="fireTargetTypeSelect">Target Type:</label>
+            <select id="fireTargetTypeSelect">
+                <option value="FLEET">Fleet</option>
+                <option value="INDUSTRY">Industry</option>
+                <option value="POPULATION">Population</option>
+                <option value="HOME_FLEETS">Home Fleets</option>
+            </select><br>
+            <label for="fireTargetFleetId">Target Fleet ID (if targeting Fleet):</label>
+            <input type="number" id="fireTargetFleetId" placeholder="Target Fleet ID"><br>
+            <label for="fireIsConditional">Conditional Fire?</label>
+            <input type="checkbox" id="fireIsConditional"><br>
+        </div>
+
         <button type="button" id="addOrderBtn" style="margin-top: 10px;">Add Order to Turn</button>
 
         <h3>Queued Orders for This Turn:</h3>
@@ -256,7 +284,9 @@
                 'MOVE': document.getElementById('moveInputs'),
                 'TRANSFER': document.getElementById('transferInputs'),
                 'LOAD_CARGO': document.getElementById('loadInputs'),
-                'UNLOAD_CARGO': document.getElementById('unloadInputs')
+                'UNLOAD_CARGO': document.getElementById('unloadInputs'),
+                'BUILD': document.getElementById('buildInputs'),
+                'FIRE': document.getElementById('fireInputs')
             };
 
             let queuedOrders = [];
@@ -299,6 +329,16 @@
                         case 'UNLOAD_CARGO':
                             desc += `Fleet ${order.fleet_id} unload ${order.metal_amount === -1 ? 'all' : order.metal_amount} metal at World ${order.world_id}`;
                             if (order.as_consumer_goods) desc += ' as Consumer Goods';
+                            break;
+                        case 'BUILD':
+                            desc += `World ${order.world_id} build ${order.quantity} of ${order.build_type}`;
+                            if (order.target_entity_id) desc += ` -> Target ID: ${order.target_entity_id}`;
+                            if (order.migration_pop_type) desc += ` (Type: ${order.migration_pop_type})`;
+                            break;
+                        case 'FIRE':
+                            desc += `Fleet ${order.firing_fleet_id} at World ${order.world_id} fire at ${order.target_type}`;
+                            if (order.target_id) desc += ` ID: ${order.target_id}`;
+                            if (order.is_conditional) desc += ' (Conditional)';
                             break;
                         default:
                             desc += 'Unknown order type';
@@ -374,6 +414,37 @@
                         newOrder.world_id = unloadWorldId;
                         newOrder.metal_amount = unloadMetalAmount;
                         newOrder.as_consumer_goods = document.getElementById('unloadAsCG').checked;
+                        break;
+                    case 'BUILD':
+                        const buildWorldId = parseInt(document.getElementById('buildWorldId').value);
+                        const buildType = document.getElementById('buildTypeSelect').value;
+                        const buildQuantity = parseInt(document.getElementById('buildQuantity').value);
+                        const buildTargetEntityIdStr = document.getElementById('buildTargetEntityId').value;
+                        
+                        if (isNaN(buildWorldId) || isNaN(buildQuantity) || buildQuantity <= 0) { valid = false; alert("Valid World ID and positive Quantity are required for Build order."); break; }
+
+                        newOrder.world_id = buildWorldId;
+                        newOrder.build_type = buildType;
+                        newOrder.quantity = buildQuantity;
+                        newOrder.target_entity_id = buildTargetEntityIdStr ? parseInt(buildTargetEntityIdStr) : null;
+                        if (newOrder.build_type === 'MIGRATE_POP') {
+                            newOrder.migration_pop_type = document.getElementById('buildMigrationPopType').value;
+                        }
+                        break;
+                    case 'FIRE':
+                        const fireFiringFleetId = parseInt(document.getElementById('fireFiringFleetId').value);
+                        const fireTargetType = document.getElementById('fireTargetTypeSelect').value;
+                        const fireWorldId = parseInt(document.getElementById('fireWorldId').value);
+                        const fireTargetFleetIdStr = document.getElementById('fireTargetFleetId').value;
+
+                        if (isNaN(fireFiringFleetId) || isNaN(fireWorldId)) { valid = false; alert("Valid Firing Fleet ID and World ID are required for Fire order."); break; }
+                        if (fireTargetType === 'FLEET' && (!fireTargetFleetIdStr || isNaN(parseInt(fireTargetFleetIdStr)))) { valid = false; alert("Target Fleet ID is required when Target Type is FLEET."); break; }
+                        
+                        newOrder.firing_fleet_id = fireFiringFleetId;
+                        newOrder.target_type = fireTargetType;
+                        newOrder.world_id = fireWorldId;
+                        newOrder.target_id = fireTargetType === 'FLEET' && fireTargetFleetIdStr ? parseInt(fireTargetFleetIdStr) : null;
+                        newOrder.is_conditional = document.getElementById('fireIsConditional').checked;
                         break;
                     default:
                         valid = false;

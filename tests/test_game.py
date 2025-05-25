@@ -802,6 +802,1035 @@ class TestGameCommands(unittest.TestCase):
         self.assertGreater(len(player_worlds), 0, "Player should see at least their homeworld.")
         self.assertGreater(len(player_fleets), 0, "Player should see at least their own fleets.")
 
+    def _create_player_for_test(self, username: str, character_type: str, user_id_override: str | None = None) -> Player:
+        """Creates a player and adds to the game instance for specific test needs."""
+        user_id = user_id_override if user_id_override else username
+        player = Player(name=username, character_type=character_type, user_id=user_id)
+        self.game.players.append(player)
+        # It's important that this player also has worlds/fleets assigned if the test expects it.
+        # For many tests, we might use existing self.player1_obj or self.player2_obj,
+        # or assign worlds/fleets to this new player explicitly in the test.
+        return player
+
+    def _process_single_order(self, order, player):
+        """Helper to simulate processing a single order for a player."""
+        # Ensure turn_number is initialized if it's the first action in a test scope
+        if not hasattr(self.game, 'turn_number') or self.game.turn_number == 0:
+            self.game.turn_number = 1 
+        
+        # Ensure turn_vp_adjustments is initialized for the game instance
+        if not hasattr(self.game, 'turn_vp_adjustments'):
+            self.game.turn_vp_adjustments = {}
+        
+        # Initialize vp adjustment for the specific player if not present for this turn
+        if player.user_id not in self.game.turn_vp_adjustments:
+            self.game.turn_vp_adjustments[player.user_id] = 0
+
+        # Dispatch to the correct execute method based on order type
+        if isinstance(order, MoveOrder):
+            return self.game.execute_move_order(order)
+        elif isinstance(order, TransferOrder):
+            return self.game.execute_transfer_order(order)
+        elif isinstance(order, LoadCargoOrder):
+            return self.game.execute_load_cargo_order(order)
+        elif isinstance(order, UnloadCargoOrder):
+            return self.game.execute_unload_cargo_order(order)
+        elif order.order_type == "BUILD": # Use string check first for broader compatibility if classes not imported
+            from app import BuildOrder # Ensure it's imported
+            if isinstance(order, BuildOrder):
+                return self.game.execute_build_order(order, player)
+        elif order.order_type == "FIRE":
+            from app import FireOrder # Ensure it's imported
+            if isinstance(order, FireOrder):
+                return self.game.execute_fire_order(order, player)
+        
+        # Fallback if specific isinstance checks didn't catch it (e.g. if only base Order was passed with type string)
+        if not (isinstance(order, MoveOrder) or isinstance(order, TransferOrder) or \
+                isinstance(order, LoadCargoOrder) or isinstance(order, UnloadCargoOrder) or \
+                isinstance(order, BuildOrder) or isinstance(order, FireOrder)):
+             raise ValueError(f"Order type {type(order)} (or string type '{order.order_type}') not supported by _process_single_order helper in test.")
+        
+        # Should have been caught by one of the isinstance or order_type string checks above
+        return False, "Unhandled order type in _process_single_order"
+
+
+    # --- 1. Building Tests (Added based on subtask) ---
+    def test_build_ships_fleet(self):
+        from app import BuildOrder # Ensure BuildOrder is available
+        player1 = self.player1_obj # Merchant, but for basic build, type doesn't change cost of ships
+        world1 = self.world_a # Owned by P1, Pop:10, Ind:10, Stockpile:20
+        world1.population = 100 # Ensure enough pop/stockpile for test
+        world1.stockpile = 50
+        world1.industry = 10
+
+        # fleet1 is P1's fleet, 10 ships, at World A. Let's use it.
+        fleet_to_build_on = self.fleet1
+        initial_ships = fleet_to_build_on.ships # Should be 10 from setUp
+
+        # Valid build
+        order1 = BuildOrder(world_id=world1.id, build_type="SHIP_FLEET", quantity=5, target_entity_id=fleet_to_build_on.id)
+        success, msg = self._process_single_order(order1, player1)
+        self.assertTrue(success, f"Ship build failed: {msg}")
+        self.assertEqual(fleet_to_build_on.ships, initial_ships + 5)
+        self.assertEqual(world1.stockpile, 45) 
+        self.assertEqual(world1.population, 95)
+
+        # Test build beyond industry capacity
+        world1.stockpile = 50
+        world1.population = 100
+        fleet_to_build_on.ships = initial_ships # Reset
+        order_cap = BuildOrder(world_id=world1.id, build_type="SHIP_FLEET", quantity=11, target_entity_id=fleet_to_build_on.id) # 11 > 10 industry
+        success, msg = self._process_single_order(order_cap, player1)
+        self.assertFalse(success, f"Should fail due to insufficient industry capacity: {msg}")
+        self.assertEqual(fleet_to_build_on.ships, initial_ships)
+
+    def test_build_ships_iships_pships(self):
+        from app import BuildOrder
+        player1 = self.player1_obj
+        world1 = self.world_a
+        world1.population = 100
+        world1.stockpile = 50
+        world1.industry = 10
+        initial_iships = world1.iships
+        initial_pships = world1.pships
+
+        # Build ISHIPS
+        order_is = BuildOrder(world_id=world1.id, build_type="SHIP_ISHOP", quantity=3)
+        success, msg = self._process_single_order(order_is, player1)
+        self.assertTrue(success, msg)
+        self.assertEqual(world1.iships, initial_iships + 3)
+        self.assertEqual(world1.stockpile, 47) 
+        self.assertEqual(world1.population, 97) 
+        
+        # Build PSHIPS
+        order_ps = BuildOrder(world_id=world1.id, build_type="SHIP_PSHIP", quantity=2)
+        success, msg = self._process_single_order(order_ps, player1)
+        self.assertTrue(success, msg)
+        self.assertEqual(world1.pships, initial_pships + 2)
+        self.assertEqual(world1.stockpile, 45) 
+        self.assertEqual(world1.population, 95) 
+
+    def test_build_industry(self):
+        from app import BuildOrder
+        player_eb = self.player2_obj # Empire Builder
+        world_eb = self.world_d # Owned by P2 (EB)
+        world_eb.population = 100
+        world_eb.stockpile = 100
+        world_eb.industry = 10 # Initial industry
+
+        player_normal = self.player1_obj # Merchant
+        world_normal = self.world_a # Owned by P1 (Merchant)
+        world_normal.population = 100
+        world_normal.stockpile = 100
+        world_normal.industry = 10 # Initial industry
+
+        # Empire Builder (cost 4 per unit) - Build 2 industry
+        # Needs: 2*4=8 metal, 2*4=8 pop, 2*4=8 ind capacity. (Has 10 ind capacity)
+        order_eb_ok = BuildOrder(world_id=world_eb.id, build_type="INDUSTRY", quantity=2)
+        success, msg = self._process_single_order(order_eb_ok, player_eb)
+        self.assertTrue(success, f"EB Industry build failed: {msg}")
+        self.assertEqual(world_eb.industry, 12) 
+        self.assertEqual(world_eb.stockpile, 100 - 8)
+        self.assertEqual(world_eb.population, 100 - 8)
+
+        # Normal Player (cost 5 per unit) - Build 1 industry
+        # Needs: 1*5=5 metal, 1*5=5 pop, 1*5=5 ind capacity. (Has 10 ind capacity)
+        order_normal_ok = BuildOrder(world_id=world_normal.id, build_type="INDUSTRY", quantity=1)
+        success, msg = self._process_single_order(order_normal_ok, player_normal)
+        self.assertTrue(success, f"Normal Industry build failed: {msg}")
+        self.assertEqual(world_normal.industry, 11)
+        self.assertEqual(world_normal.stockpile, 100 - 5)
+        self.assertEqual(world_normal.population, 100 - 5)
+
+    def test_build_population_limit(self):
+        from app import BuildOrder
+        player_eb = self.player2_obj # Empire Builder
+        world_eb = self.world_d
+        world_eb.population = 100
+        world_eb.stockpile = 100
+        world_eb.industry = 40 # Sufficient industry
+        initial_max_pop_eb = world_eb.max_population
+
+        player_normal = self.player1_obj # Merchant
+        world_normal = self.world_a
+        world_normal.population = 100
+        world_normal.stockpile = 100
+        world_normal.industry = 25 # Sufficient industry
+        initial_max_pop_normal = world_normal.max_population
+        
+        # Empire Builder (cost 4 per unit of increase) - Increase by 10
+        order_eb_ok = BuildOrder(world_id=world_eb.id, build_type="POP_LIMIT", quantity=10)
+        success, msg = self._process_single_order(order_eb_ok, player_eb)
+        self.assertTrue(success, msg)
+        self.assertEqual(world_eb.max_population, initial_max_pop_eb + 10)
+        self.assertEqual(world_eb.stockpile, 100 - (10*4))
+        self.assertEqual(world_eb.population, 100 - (10*4))
+
+        # Normal Player (cost 5 per unit of increase) - Increase by 5
+        order_normal_ok = BuildOrder(world_id=world_normal.id, build_type="POP_LIMIT", quantity=5)
+        success, msg = self._process_single_order(order_normal_ok, player_normal)
+        self.assertTrue(success, msg)
+        self.assertEqual(world_normal.max_population, initial_max_pop_normal + 5)
+        self.assertEqual(world_normal.stockpile, 100 - (5*5))
+        self.assertEqual(world_normal.population, 100 - (5*5))
+
+    def test_migrate_population(self):
+        from app import BuildOrder
+        player_apostle = self._create_player_for_test("apostle_mig", "Apostle", "apostle_mig_id")
+        
+        # Source world for apostle
+        world_source = self._create_player_for_test("source_owner", "Empire Builder").home_world # Dummy owner for setup
+        world_source = World(id=20, name="SourceWorld", owner=player_apostle, population=50, robot_units=20, convert_units=10, converts_owner_id="apostle_mig_id", industry=10, stockpile=30, max_population=100)
+        self.game.worlds.append(world_source)
+        player_apostle.worlds.append(world_source)
+        player_apostle.home_world = world_source
+
+
+        # Target world for apostle
+        world_target = World(id=21, name="TargetWorld", owner=player_apostle, population=5, robot_units=0, convert_units=0, industry=10, stockpile=10, max_population=50)
+        self.game.worlds.append(world_target)
+        player_apostle.worlds.append(world_target)
+
+        world_source.connections.append(world_target) # Connect them
+        world_target.connections.append(world_source)
+
+        # Migrate NORMAL pop
+        order_norm = BuildOrder(world_id=world_source.id, build_type="MIGRATE_POP", quantity=10, target_entity_id=world_target.id, migration_pop_type="NORMAL")
+        success, msg = self._process_single_order(order_norm, player_apostle)
+        self.assertTrue(success, f"Migrate NORMAL failed: {msg}")
+        self.assertEqual(world_source.population, 40)
+        self.assertEqual(world_target.population, 15)
+        self.assertEqual(world_source.stockpile, 20)
+
+        # Migrate ROBOT pop
+        world_source.stockpile = 30 # Reset
+        order_robot = BuildOrder(world_id=world_source.id, build_type="MIGRATE_POP", quantity=5, target_entity_id=world_target.id, migration_pop_type="ROBOT")
+        success, msg = self._process_single_order(order_robot, player_apostle) # Player type doesn't restrict robot migration itself
+        self.assertTrue(success, f"Migrate ROBOT failed: {msg}")
+        self.assertEqual(world_source.robot_units, 15)
+        self.assertEqual(world_target.robot_units, 5)
+        self.assertEqual(world_source.stockpile, 25)
+
+        # Migrate CONVERT pop
+        world_source.stockpile = 30 # Reset
+        order_convert = BuildOrder(world_id=world_source.id, build_type="MIGRATE_POP", quantity=3, target_entity_id=world_target.id, migration_pop_type="CONVERT")
+        success, msg = self._process_single_order(order_convert, player_apostle)
+        self.assertTrue(success, f"Migrate CONVERT failed: {msg}")
+        self.assertEqual(world_source.convert_units, 7)
+        self.assertEqual(world_target.convert_units, 3 + 0) # Target had 0 converts, now 3
+        self.assertEqual(world_target.converts_owner_id, player_apostle.user_id)
+        self.assertEqual(world_source.stockpile, 27)
+
+    def test_build_robots_berserker(self):
+        from app import BuildOrder
+        player_berserker = self._create_player_for_test("robo_builder", "Berserker")
+        world_b_robot_controlled = World(id=30, name="RoboWorld", owner=player_berserker, population=0, robot_units=10, convert_units=0, industry=10, stockpile=20)
+        self.game.worlds.append(world_b_robot_controlled)
+        player_berserker.worlds.append(world_b_robot_controlled)
+
+        player_normal = self.player1_obj # Merchant
+
+        # Valid Berserker build (1 effort unit = 1 metal, 1 ind capacity, 1 robot operator -> 2 new robots)
+        order_b_ok = BuildOrder(world_id=world_b_robot_controlled.id, build_type="ROBOTS", quantity=1)
+        success, msg = self._process_single_order(order_b_ok, player_berserker)
+        self.assertTrue(success, msg)
+        self.assertEqual(world_b_robot_controlled.robot_units, 12)
+        self.assertEqual(world_b_robot_controlled.stockpile, 19)
+        
+        # Test non-Berserker cannot build robots (using world_a, which is owned by Merchant player1_obj)
+        self.world_a.robot_units = 10 # Make it seem robot controlled for a moment
+        self.world_a.population = 0
+        self.world_a.convert_units = 0
+        order_n_fail = BuildOrder(world_id=self.world_a.id, build_type="ROBOTS", quantity=1)
+        success, msg = self._process_single_order(order_n_fail, player_normal)
+        self.assertFalse(success, "Non-Berserker should not be able to build robots: " + msg)
+        self.world_a.population = 10 # Reset world_a
+
+    # --- 2. Metal Production & Mine Logic Tests (Added based on subtask) ---
+    def _run_full_turn_for_player(self, player):
+        """
+        Simulates the core logic of Game.process_turn for a single player's orders.
+        Focuses on end-of-turn phases: production, growth, capture, VP.
+        Assumes player orders for the 'turn' being simulated are processed before calling this.
+        """
+        # self.game.turn_number +=1 # Turn number incremented by process_turn, not here.
+        # self.game.turn_vp_adjustments = {} # Reset by process_turn
+        
+        # Simulate these phases as they happen in process_turn, after orders
+        # Metal Production (Simplified: for all worlds in game, check owner)
+        for world in self.game.worlds:
+            if world.owner and not world.is_black_hole:
+                pop_for_mining = 0
+                if world.robot_units > 0 and world.population == 0 and world.convert_units == 0:
+                    pop_for_mining = world.robot_units
+                elif world.robot_units == 0 and world.convert_units == 0:
+                     pop_for_mining = world.population
+                if pop_for_mining > 0 and world.mines > 0:
+                    produced_metal = min(world.mines, pop_for_mining)
+                    old_stockpile = world.stockpile
+                    world.stockpile = min(world.stockpile + produced_metal, 255)
+        
+        # Population Growth (Simplified: for the specified player's worlds only)
+        for world in self.game.worlds:
+            if world.owner == player and not world.is_black_hole:
+                if world.robot_units > 0: continue
+                current_total_pop = world.population + world.convert_units
+                if current_total_pop >= world.max_population: continue
+                base_growth = (world.population + world.convert_units) // 10
+                if base_growth == 0 and current_total_pop > 0 and current_total_pop < world.max_population: base_growth = 1
+                actual_growth = min(base_growth, world.max_population - current_total_pop)
+                if actual_growth <= 0: continue
+                if player.character_type == "Apostle":
+                    converts_from_normal = min(actual_growth, world.population)
+                    if converts_from_normal > 0: world.population -= converts_from_normal; world.convert_units += converts_from_normal
+                    remaining_growth = actual_growth - converts_from_normal
+                    if remaining_growth > 0: world.convert_units += remaining_growth
+                    world.converts_owner_id = player.user_id
+                else:
+                    world.population += actual_growth
+        
+        # Resolve World/Key Capture (this calls its own print and event logic)
+        self.game.resolve_world_and_key_capture() # This also does mine increase at its end
+
+        # Final VP update for the player
+        base_vp = player.character.calculate_victory_points(self.game)
+        event_vp = self.game.turn_vp_adjustments.get(player.user_id, 0) # Assuming turn_vp_adjustments was populated by order processing
+        player.victory_points = base_vp + event_vp
+
+    def test_metal_production(self):
+        player1 = self.player1_obj
+        world1 = self.world_a 
+        world1.population=15; world1.mines=10; world1.stockpile=0 # Prod=10
+        
+        world_less_pop = World(id=100, name="WLessPop", owner=player1, population=5, mines=10, stockpile=0) # Prod=5
+        self.game.worlds.append(world_less_pop)
+        player1.worlds.append(world_less_pop)
+
+        world_robot = World(id=101, name="WRobot", owner=player1, population=0, robot_units=8, mines=10, stockpile=0) # Prod=8
+        self.game.worlds.append(world_robot)
+        player1.worlds.append(world_robot)
+        
+        world_cap = World(id=102, name="WCap", owner=player1, population=20, mines=10, stockpile=250) # Stockpile cap
+        self.game.worlds.append(world_cap)
+        player1.worlds.append(world_cap)
+
+        self._run_full_turn_for_player(player1) 
+
+        self.assertEqual(world1.stockpile, 10)
+        self.assertEqual(world_less_pop.stockpile, 5)
+        self.assertEqual(world_robot.stockpile, 8)
+        self.assertEqual(world_cap.stockpile, 255)
+
+    def test_turns_owned_and_mine_increase(self):
+        player1 = self.player1_obj
+        world_inc = World(id=110, name="WInc", owner=player1, mines=5, turns_owned=7)
+        self.game.worlds.append(world_inc)
+        player1.worlds.append(world_inc)
+
+        world_max = World(id=111, name="WMax", owner=player1, mines=30, turns_owned=7)
+        self.game.worlds.append(world_max)
+        player1.worlds.append(world_max)
+        
+        self._run_full_turn_for_player(player1) 
+        
+        self.assertEqual(world_inc.turns_owned, 1) 
+        self.assertEqual(world_inc.mines, 6)
+        self.assertEqual(world_max.turns_owned, 1)
+        self.assertEqual(world_max.mines, 30)
+
+
+    # --- 3. Basic Firing Logic Tests ---
+    def test_fire_at_fleet(self):
+        # Player objects are: self.player1_obj (Merchant), self.player2_obj (Empire Builder)
+        # Worlds: self.world_a (P1), self.world_b (None), self.world_c (P1), self.world_d (P2)
+        # Fleets: self.fleet1 (P1@A), self.fleet2_no_ships (P1@A), self.fleet3_at_b (P1@B), self.fleet4_p2_at_a (P2@A)
+        
+        # For firing tests, let's use player2 (Empire Builder) as attacker initially to avoid Merchant penalty complications.
+        attacker_player = self.player2_obj # Empire Builder
+        defender_player = self.player1_obj # Merchant
+
+        # Move P2's fleet (fleet4_p2_at_a) to world_b to avoid conflict with P1's fleet1 if world_a is used.
+        # Or, use world_b which is neutral and has P1's fleet3_at_b.
+        # Let's setup a new fleet for P2 at world_b for clarity.
+        world_combat = self.world_b # Neutral world
+        
+        attacker_fleet = Fleet(id=101, name="AttackerP2", ships=10, location=world_combat, owner=attacker_player, cargo=0)
+        self.game.fleets.append(attacker_fleet)
+        attacker_player.fleets.append(attacker_fleet)
+
+        defender_fleet_loaded = Fleet(id=102, name="DefenderP1Loaded", ships=10, location=world_combat, owner=defender_player, cargo=5) # Loaded, 1 hit/ship
+        self.game.fleets.append(defender_fleet_loaded)
+        defender_player.fleets.append(defender_fleet_loaded)
+        
+        defender_fleet_empty = Fleet(id=103, name="DefenderP1Empty", ships=10, location=world_combat, owner=defender_player, cargo=0) # Empty, 2 hits/ship
+        self.game.fleets.append(defender_fleet_empty)
+        defender_player.fleets.append(defender_fleet_empty)
+
+        from app import FireOrder # Ensure FireOrder is available
+
+        # Fire at loaded fleet (10 shots, 1 hit/ship => 10 ships destroyed)
+        fire_order_loaded = FireOrder(firing_fleet_id=attacker_fleet.id, target_type="FLEET", world_id=world_combat.id, target_id=defender_fleet_loaded.id)
+        success, msg = self._process_single_order(fire_order_loaded, attacker_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(defender_fleet_loaded.ships, 0, msg) 
+        self.assertIsNone(defender_fleet_loaded.owner, "Destroyed fleet should be unowned")
+
+        # Fire at empty fleet (10 shots, 2 hits/ship => 5 ships destroyed)
+        defender_fleet_empty.ships = 10 # Reset
+        attacker_fleet.ships = 10 # Reset
+        fire_order_empty = FireOrder(firing_fleet_id=attacker_fleet.id, target_type="FLEET", world_id=world_combat.id, target_id=defender_fleet_empty.id)
+        success, msg = self._process_single_order(fire_order_empty, attacker_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(defender_fleet_empty.ships, 5, msg)
+
+        # Test Merchant firing limitation (using self.player1_obj as Merchant)
+        merchant_player = self.player1_obj
+        merchant_fleet_normal_cargo = self.fleet1 # P1@A, 10 ships, 10 cargo. Effective ships = 10.
+        merchant_fleet_normal_cargo.location = world_combat # Move to combat zone
+        merchant_fleet_normal_cargo.ships = 10
+        merchant_fleet_normal_cargo.cargo = 10 
+
+        merchant_fleet_overloaded = Fleet(id=104, name="MerchantOver", ships=10, location=world_combat, owner=merchant_player, cargo=15) # Effective ships = 5
+        self.game.fleets.append(merchant_fleet_overloaded)
+        merchant_player.fleets.append(merchant_fleet_overloaded)
+
+        defender_target_for_merchant = Fleet(id=105, name="TargetForMerc", ships=20, location=world_combat, owner=self.player2_obj, cargo=0) # Empty target
+        self.game.fleets.append(defender_target_for_merchant)
+        self.player2_obj.fleets.append(defender_target_for_merchant)
+
+        # Merchant with normal cargo (10 ships, 10 cargo -> 10 effective ships -> 5 destroyed from target)
+        fire_order_merc_norm = FireOrder(firing_fleet_id=merchant_fleet_normal_cargo.id, target_type="FLEET", world_id=world_combat.id, target_id=defender_target_for_merchant.id)
+        success, msg = self._process_single_order(fire_order_merc_norm, merchant_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(defender_target_for_merchant.ships, 15, f"Merchant normal cargo firing failed: {msg}")
+
+        # Merchant with overloaded cargo (10 ships, 15 cargo -> 5 effective ships -> 2 destroyed from target)
+        defender_target_for_merchant.ships = 20 # Reset target
+        fire_order_merc_over = FireOrder(firing_fleet_id=merchant_fleet_overloaded.id, target_type="FLEET", world_id=world_combat.id, target_id=defender_target_for_merchant.id)
+        success, msg = self._process_single_order(fire_order_merc_over, merchant_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(defender_target_for_merchant.ships, 18, f"Merchant overloaded firing failed: {msg}") # 20 - (5/2) = 17.5 -> 18 (or 2 destroyed)
+
+        # Test Berserker VP for ship kills
+        berserker_player = self._create_player_for_test("berserker_killer", "Berserker")
+        berserker_fleet = Fleet(id=106, name="BerserkerF", owner=berserker_player, location=world_combat, ships=10, cargo=0)
+        self.game.fleets.append(berserker_fleet)
+        berserker_player.fleets.append(berserker_fleet)
+        
+        target_for_berserker = Fleet(id=107, name="TargetForBers", owner=self.player1_obj, location=world_combat, ships=3, cargo=0)
+        self.game.fleets.append(target_for_berserker)
+        self.player1_obj.fleets.append(target_for_berserker)
+        
+        initial_berserker_vp_adj = self.game.turn_vp_adjustments.get(berserker_player.user_id, 0)
+        
+        fire_order_berserker = FireOrder(firing_fleet_id=berserker_fleet.id, target_type="FLEET", world_id=world_combat.id, target_id=target_for_berserker.id)
+        success, msg = self._process_single_order(fire_order_berserker, berserker_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(target_for_berserker.ships, 0, msg)
+        expected_vp_gain = 3 * 2 
+        self.assertEqual(self.game.turn_vp_adjustments.get(berserker_player.user_id, 0), initial_berserker_vp_adj + expected_vp_gain)
+
+
+    def test_fire_at_industry(self):
+        attacker_player = self.player1_obj # Merchant, but penalty doesn't apply to non-fleet targets
+        attacker_fleet = self.fleet1 # 10 ships, 10 cargo (effective 10 shots)
+        attacker_fleet.location = self.world_b # Target world_b
+        self.world_b.owner = self.player2_obj # Defender owns the world
+        self.world_b.iships = 5
+        self.world_b.industry = 10
+        
+        from app import FireOrder
+
+        # Fire order: 10 shots. ISHIPS cost 2 shots each. Industry costs 2 shots each.
+        # Destroy 5 ISHIPS (5 * 2 = 10 shots). Remaining shots = 10 - 10 = 0.
+        # No industry destroyed.
+        fire_order = FireOrder(firing_fleet_id=attacker_fleet.id, target_type="INDUSTRY", world_id=self.world_b.id)
+        success, msg = self._process_single_order(fire_order, attacker_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(self.world_b.iships, 0, msg)
+        self.assertEqual(self.world_b.industry, 10, msg) 
+
+        # Test with more shots to hit industry
+        attacker_fleet.ships = 15 # 15 shots (assuming cargo doesn't affect industry targeting shots for Merchant)
+        self.world_b.iships = 3
+        self.world_b.industry = 7
+        # 15 shots. ISHIPS: 3 * 2 = 6 shots. Rem = 9. Industry: 9/2 = 4 units.
+        fire_order_more = FireOrder(firing_fleet_id=attacker_fleet.id, target_type="INDUSTRY", world_id=self.world_b.id)
+        success, msg = self._process_single_order(fire_order_more, attacker_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(self.world_b.iships, 0, msg)
+        self.assertEqual(self.world_b.industry, 3, msg) # 7 - 4 = 3
+
+
+    def test_fire_at_population(self):
+        from app import FireOrder
+        attacker_berserker = self._create_player_for_test("berserker_pop_killer", "Berserker")
+        attacker_normal = self.player1_obj # Merchant
+        
+        world_target = self.world_c # Owned by P1 initially, let's make it P2's for this test
+        world_target.owner = self.player2_obj
+        world_target.pships=5
+        world_target.population=20
+        world_target.convert_units=10 
+        world_target.converts_owner_id = self.player2_obj.user_id # P2's converts
+        world_target.robot_units=5
+        
+        fleet_berserker = Fleet(id=201, name="BerserkerPopF", owner=attacker_berserker, location=world_target, ships=30)
+        self.game.fleets.append(fleet_berserker)
+        attacker_berserker.fleets.append(fleet_berserker)
+
+        fleet_normal = Fleet(id=202, name="NormalPopF", owner=attacker_normal, location=world_target, ships=30, cargo=0) # No cargo penalty
+        self.game.fleets.append(fleet_normal)
+        attacker_normal.fleets.append(fleet_normal)
+        
+        # Berserker firing (30 shots)
+        # PSHIPS: 5 units * 2 shots/unit = 10 shots. Destroy 5 PSHIPS. Shots remaining = 20.
+        # POP: 20 shots / 2 shots/unit = 10 pop units killed. (Order: 10 Normal)
+        # VP Gain: 10 pop units * 2 VP/unit = 20 VP
+        initial_b_vp_adj = self.game.turn_vp_adjustments.get(attacker_berserker.user_id, 0)
+        
+        fire_order_b = FireOrder(firing_fleet_id=fleet_berserker.id, target_type="POPULATION", world_id=world_target.id)
+        success, msg = self._process_single_order(fire_order_b, attacker_berserker)
+        self.assertTrue(success, msg)
+        self.assertEqual(world_target.pships, 0, f"Berserker PSHIPs: {msg}")
+        self.assertEqual(world_target.population, 10, f"Berserker Normal Pop: {msg}") # 20 - 10
+        self.assertEqual(world_target.convert_units, 10, f"Berserker Convert Pop should be untouched: {msg}")
+        self.assertEqual(self.game.turn_vp_adjustments.get(attacker_berserker.user_id, 0), initial_b_vp_adj + (10 * 2))
+
+        # Reset world for normal player
+        world_target.owner = self.player2_obj
+        world_target.pships=5
+        world_target.population=20
+        world_target.convert_units=10
+        world_target.robot_units=5
+
+        # Normal player firing (30 shots) - same destruction, different VP
+        # VP Loss: 10 pop units * 1 VP/unit = -10 VP
+        initial_n_vp_adj = self.game.turn_vp_adjustments.get(attacker_normal.user_id, 0)
+        fire_order_n = FireOrder(firing_fleet_id=fleet_normal.id, target_type="POPULATION", world_id=world_target.id)
+        success, msg = self._process_single_order(fire_order_n, attacker_normal)
+        self.assertTrue(success, msg)
+        self.assertEqual(world_target.pships, 0, f"Normal PSHIPs: {msg}")
+        self.assertEqual(world_target.population, 10, f"Normal Normal Pop: {msg}")
+        self.assertEqual(self.game.turn_vp_adjustments.get(attacker_normal.user_id, 0), initial_n_vp_adj + (-10 * 1))
+
+
+    def test_fire_at_home_fleets(self):
+        from app import FireOrder
+        attacker_player = self.player1_obj
+        defender_player = self.player2_obj
+        
+        world_target = self.world_d # Owned by P2 (defender)
+        world_target.iships = 5
+        world_target.pships = 5
+        
+        attacker_fleet = self.fleet1 # P1's fleet
+        attacker_fleet.location = world_target
+        attacker_fleet.ships = 22 # 22 shots (cargo is 10, so 10 effective shots for Merchant)
+                                  # The prompt says "Merchant firing limitations (overloaded ships don't fire)"
+                                  # This usually applies to FLEET targets. Let's assume for non-FLEET targets, all ships fire.
+                                  # Revisit this if rule implies Merchant shot penalty applies to all target types.
+                                  # For now, assuming 22 shots from 22 ships if cargo doesn't reduce for ground targets.
+                                  # Let's simplify and assume attacker_fleet has 0 cargo for this test for max shots.
+        attacker_fleet.cargo = 0
+        attacker_fleet.ships = 22
+
+
+        # 22 shots:
+        # ISHIPS: 5 units * 2 shots/unit = 10 shots. Destroy 5 ISHIPS. Shots remaining = 12.
+        # PSHIPS: 5 units * 2 shots/unit = 10 shots. Destroy 5 PSHIPS. Shots remaining = 2.
+        # World neutralized as ISHIPS=0, PSHIPS=0 and >=2 shots remaining.
+        fire_order = FireOrder(firing_fleet_id=attacker_fleet.id, target_type="HOME_FLEETS", world_id=world_target.id)
+        success, msg = self._process_single_order(fire_order, attacker_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(world_target.iships, 0, msg)
+        self.assertEqual(world_target.pships, 0, msg)
+        self.assertIsNone(world_target.owner, "World should be unowned: " + msg)
+        self.assertEqual(world_target.turns_owned, 0, "Turns_owned should reset")
+
+
+    def test_apostle_firing_penalty(self):
+        from app import FireOrder
+        apostle_player = self._create_player_for_test("apostle_fire", "Apostle")
+        apostle_fleet = Fleet(id=301, name="ApostleF", owner=apostle_player, location=self.world_a, ships=1)
+        self.game.fleets.append(apostle_fleet)
+        apostle_player.fleets.append(apostle_fleet)
+        
+        target_fleet = self.fleet4_p2_at_a # P2's fleet at World A
+        
+        initial_apostle_vp_adj = self.game.turn_vp_adjustments.get(apostle_player.user_id, 0)
+
+        fire_order = FireOrder(firing_fleet_id=apostle_fleet.id, target_type="FLEET", world_id=self.world_a.id, target_id=target_fleet.id)
+        success, msg = self._process_single_order(fire_order, apostle_player)
+        self.assertTrue(success, msg)
+        self.assertEqual(self.game.turn_vp_adjustments.get(apostle_player.user_id, 0), initial_apostle_vp_adj -1)
+
+
+    def test_conditional_fire_order_handling(self):
+        from app import FireOrder
+        player1 = self.player1_obj
+        fleet1 = self.fleet1
+        fleet1.location = self.world_a
+        
+        target_fleet = self.fleet4_p2_at_a # P2's fleet at A
+        target_fleet.ships = 1 # Ensure it can be destroyed
+
+        fire_order_cond = FireOrder(
+            firing_fleet_id=fleet1.id, 
+            target_type="FLEET", 
+            world_id=self.world_a.id, 
+            target_id=target_fleet.id, 
+            is_conditional=True
+        )
+        success, msg = self._process_single_order(fire_order_cond, player1)
+        self.assertTrue(success, msg)
+        self.assertIn("Conditional fire order noted", msg)
+        self.assertEqual(target_fleet.ships, 1, "Conditional fire should not destroy ships")
+
+
+    # --- Helper for end-of-turn phase tests ---
+    def _run_full_turn_for_player_eot_phases(self, player):
+        """
+        Simulates end-of-turn phases for a given player after their orders would have been processed.
+        This includes Metal Production, Population Growth, and World/Key Capture (which includes mine increase).
+        It then calculates final VPs for that player for the "turn".
+        NOTE: This helper assumes player orders for the 'turn' being simulated are already processed
+        and their effects (like VP adjustments from combat) are in self.game.turn_vp_adjustments.
+        """
+        if not hasattr(self.game, 'turn_number') or self.game.turn_number == 0:
+            self.game.turn_number = 1
+        else:
+            # If called multiple times in a test for sequential turns, increment.
+            # For isolated EOT phase testing, usually turn_number=1 is fine.
+            # self.game.turn_number +=1 
+            pass
+        
+        print(f"--- Simulating EOT Phases for Turn {self.game.turn_number} for Player {player.name} ---")
+        
+        if not hasattr(self.game, 'turn_vp_adjustments'): # Ensure this exists
+            self.game.turn_vp_adjustments = {}
+        if player.user_id not in self.game.turn_vp_adjustments: # Ensure player entry exists
+            self.game.turn_vp_adjustments[player.user_id] = 0
+
+
+        # --- Metal Production Phase (as in Game.process_turn) ---
+        # This should apply to ALL owned worlds in the game, not just the current player's.
+        print(f"Turn {self.game.turn_number}: EOT - Metal Production Phase")
+        for world in self.game.worlds: # Iterate all worlds in the game
+            if world.owner and not world.is_black_hole:
+                pop_for_mining = 0
+                if world.robot_units > 0 and world.population == 0 and world.convert_units == 0:
+                    pop_for_mining = world.robot_units
+                elif world.robot_units == 0 and world.convert_units == 0: # Normal pop or mixed (if converts don't mine)
+                     pop_for_mining = world.population
+                
+                if pop_for_mining > 0 and world.mines > 0:
+                    produced_metal = min(world.mines, pop_for_mining)
+                    old_stockpile = world.stockpile
+                    world.stockpile = min(world.stockpile + produced_metal, 255)
+                    if world.stockpile > old_stockpile:
+                        print(f"World {world.name} (Owner: {world.owner.name}) produced {world.stockpile - old_stockpile} metal. New stockpile: {world.stockpile}.")
+                        # self.game.add_turn_event(world.owner.user_id, f"World {world.name} produced {world.stockpile - old_stockpile} metal.")
+
+
+        # --- Population Growth Phase (as in Game.process_turn - for the specified player) ---
+        print(f"Turn {self.game.turn_number}: EOT - Population Growth Phase for {player.name}")
+        for world in self.game.worlds: # Iterate all worlds
+            if world.owner == player and not world.is_black_hole: # Growth only for this player's worlds
+                if world.robot_units > 0: continue # Robots don't grow
+
+                current_total_pop = world.population + world.convert_units
+                if current_total_pop >= world.max_population: continue
+
+                base_growth = (world.population + world.convert_units) // 10
+                if base_growth == 0 and current_total_pop > 0 and current_total_pop < world.max_population:
+                    base_growth = 1
+                
+                actual_growth = min(base_growth, world.max_population - current_total_pop)
+                if actual_growth <= 0: continue
+
+                growth_msg_parts = [f"World {world.name} (ID: {world.id})"]
+                if player.character_type == "Apostle":
+                    converts_from_normal = min(actual_growth, world.population)
+                    if converts_from_normal > 0:
+                        world.population -= converts_from_normal
+                        world.convert_units += converts_from_normal
+                        growth_msg_parts.append(f"converted {converts_from_normal} pop to converts.")
+                    remaining_growth = actual_growth - converts_from_normal
+                    if remaining_growth > 0:
+                        world.convert_units += remaining_growth
+                        growth_msg_parts.append(f"grew {remaining_growth} new converts.")
+                    world.converts_owner_id = player.user_id
+                    if converts_from_normal > 0 or remaining_growth > 0:
+                        self.game.add_turn_event(player.user_id, f"{' '.join(growth_msg_parts)} New totals: Pop {world.population}, Converts {world.convert_units}.")
+                else: # Non-Apostle
+                    world.population += actual_growth
+                    self.game.add_turn_event(player.user_id, f"World {world.name} population grew by {actual_growth}. New pop: {world.population}.")
+        
+        # --- World and Key Capture Logic (includes mine increase at its end) ---
+        # This is a global phase, affecting all players based on presence.
+        self.game.resolve_world_and_key_capture() 
+
+        # --- Final Player VP Update Phase (for the specified player) ---
+        print(f"Turn {self.game.turn_number}: EOT - Final VP Update for {player.name}")
+        base_turn_vp = player.character.calculate_victory_points(self.game)
+        event_vp = self.game.turn_vp_adjustments.get(player.user_id, 0)
+        player.victory_points = base_turn_vp + event_vp
+        
+        vp_update_msg = (
+            f"End of Turn {self.game.turn_number} for {player.name}: "
+            f"Base VP: {base_turn_vp}, Event VP: {event_vp}, Total VP: {player.victory_points}."
+        )
+        self.game.add_turn_event(player.user_id, vp_update_msg)
+        print(vp_update_msg)
+
+
+    # --- 2. Metal Production & Mine Logic Tests (Re-added with correct name) ---
+    def test_metal_production_eot(self): # Renamed to avoid conflict if old one existed
+        player1 = self.player1_obj # Merchant
+        world1 = self.world_a 
+        world1.population=15; world1.mines=10; world1.stockpile=0 # Prod=10
+        
+        world_less_pop = World(id=100, name="WLessPop", owner=player1, population=5, mines=10, stockpile=0, connections=[]) # Prod=5
+        self.game.worlds.append(world_less_pop)
+        player1.worlds.append(world_less_pop)
+
+        # Robot world owned by a different player for testing global production
+        player_berserker_owner = self._create_player_for_test("robo_owner", "Berserker")
+        world_robot = World(id=101, name="WRobot", owner=player_berserker_owner, population=0, robot_units=8, mines=10, stockpile=0, connections=[]) # Prod=8
+        self.game.worlds.append(world_robot)
+        player_berserker_owner.worlds.append(world_robot)
+        
+        world_cap = World(id=102, name="WCap", owner=player1, population=20, mines=10, stockpile=250, connections=[]) # Stockpile cap
+        self.game.worlds.append(world_cap)
+        player1.worlds.append(world_cap)
+
+        # Simulate EOT phases (which includes metal production for all relevant worlds)
+        self._run_full_turn_for_player_eot_phases(player1) # Parameter is for pop growth and VP focus. Metal is global.
+
+        self.assertEqual(world1.stockpile, 10)
+        self.assertEqual(world_less_pop.stockpile, 5)
+        self.assertEqual(world_robot.stockpile, 8) # Check production for other player's world
+        self.assertEqual(world_cap.stockpile, 255)
+
+    def test_turns_owned_and_mine_increase_eot(self): # Renamed
+        player1 = self.player1_obj
+        world_inc = World(id=110, name="WInc", owner=player1, mines=5, turns_owned=7, connections=[])
+        self.game.worlds.append(world_inc)
+        player1.worlds.append(world_inc)
+
+        world_max_mine = World(id=111, name="WMaxMine", owner=player1, mines=30, turns_owned=7, connections=[])
+        self.game.worlds.append(world_max_mine)
+        player1.worlds.append(world_max_mine)
+        
+        # Simulate EOT phases. resolve_world_and_key_capture handles mine increase.
+        self._run_full_turn_for_player_eot_phases(player1) 
+        
+        self.assertEqual(world_inc.turns_owned, 1, "Turns owned should reset after mine increase attempt") 
+        self.assertEqual(world_inc.mines, 6, "Mines should increase")
+        self.assertEqual(world_max_mine.turns_owned, 1, "Turns owned should reset even if mines at max")
+        self.assertEqual(world_max_mine.mines, 30, "Mines should not exceed 30")
+
+    # --- 4. World/Key Capture Logic Tests ---
+    def test_world_capture_neutral_to_player(self):
+        # self.world_b is initially unowned. self.fleet1 (P1) moves there.
+        self.fleet1.location = self.world_b 
+        self.fleet1.ships = 1 # Needs ships to capture
+        self.fleet1.is_at_peace = False
+
+        # Ensure no other fleets are at world_b to contest
+        for f in self.game.fleets:
+            if f != self.fleet1 and f.location == self.world_b:
+                f.location = self.world_isolated # Move other fleets away
+
+        self.assertIsNone(self.world_b.owner) # Pre-condition
+
+        self._run_full_turn_for_player_eot_phases(self.player1_obj) # Capture happens in resolve_world_and_key_capture
+
+        self.assertEqual(self.world_b.owner, self.player1_obj)
+        self.assertEqual(self.world_b.turns_owned, 1)
+
+    def test_world_capture_player_to_player(self):
+        # self.world_d is owned by player2_obj. player1_obj's fleet1 moves there.
+        self.fleet1.location = self.world_d
+        self.fleet1.ships = 1
+        self.fleet1.is_at_peace = False
+        
+        # Ensure player2_obj has no fleets at world_d to contest
+        for f in self.player2_obj.fleets:
+            if f.location == self.world_d:
+                f.location = self.world_isolated # Move P2's fleets away from their own world for this test
+
+        self.assertEqual(self.world_d.owner, self.player2_obj) # Pre-condition
+
+        self._run_full_turn_for_player_eot_phases(self.player1_obj)
+
+        self.assertEqual(self.world_d.owner, self.player1_obj, "Player1 should have captured World D")
+        self.assertEqual(self.world_d.turns_owned, 1)
+
+    def test_world_capture_no_capture_if_ally(self):
+        # world_d is P2's. fleet1 (P1) is there. P1 and P2 are allies.
+        self.player1_obj.allies.append(self.player2_obj.user_id)
+        self.player2_obj.allies.append(self.player1_obj.user_id)
+
+        self.fleet1.location = self.world_d
+        self.fleet1.ships = 1
+        self.fleet1.is_at_peace = False
+        
+        # Ensure P2 has no other fleets to simplify
+        for f in self.game.fleets:
+            if f.owner == self.player2_obj and f.location == self.world_d :
+                 f.location = self.world_isolated # Move them away
+
+        initial_owner = self.world_d.owner
+        self.assertEqual(initial_owner, self.player2_obj)
+
+        self._run_full_turn_for_player_eot_phases(self.player1_obj)
+
+        self.assertEqual(self.world_d.owner, initial_owner, "Ally should not capture world")
+
+    def test_loose_key_capture(self):
+        unowned_fleet_key = Fleet(id=300, name="KeyFleet", ships=0, location=self.world_b, owner=None) # Unowned, 0 ships
+        self.game.fleets.append(unowned_fleet_key)
+        
+        self.fleet1.location = self.world_b # P1's fleet1 is at the same location
+        self.fleet1.ships = 1
+        self.fleet1.is_at_peace = False
+
+        # Ensure no other player fleets are at world_b
+        for f in self.game.fleets:
+            if f.owner != self.player1_obj and f.location == self.world_b:
+                f.location = self.world_isolated
+
+        self.assertIsNone(unowned_fleet_key.owner)
+        self._run_full_turn_for_player_eot_phases(self.player1_obj)
+        self.assertEqual(unowned_fleet_key.owner, self.player1_obj, "Player1 should capture the loose key")
+
+    def test_loose_key_no_capture_if_contested_or_no_presence(self):
+        key_fleet = Fleet(id=301, name="ContestedKey", ships=0, location=self.world_b, owner=None)
+        self.game.fleets.append(key_fleet)
+
+        # P1's fleet1 is there
+        self.fleet1.location = self.world_b
+        self.fleet1.ships = 1
+        self.fleet1.is_at_peace = False
+        
+        # P2's fleet4 is also there
+        self.fleet4_p2_at_a.location = self.world_b # fleet4_p2_at_a is P2's fleet
+        self.fleet4_p2_at_a.ships = 1
+        self.fleet4_p2_at_a.is_at_peace = False
+        
+        # P1 and P2 are not allies for this sub-test
+        self.player1_obj.allies = []
+        self.player2_obj.allies = []
+
+
+        self._run_full_turn_for_player_eot_phases(self.player1_obj) # Process for P1
+        # Since capture is global, it doesn't matter which player's EOT triggers it if state is right
+        self.assertIsNone(key_fleet.owner, "Key should remain unowned if contested by non-allies")
+
+        # Test no presence
+        key_fleet_no_presence = Fleet(id=302, name="NoPresenceKey", ships=0, location=self.world_c, owner=None)
+        self.game.fleets.append(key_fleet_no_presence)
+        # Move all fleets away from world_c
+        for f in self.game.fleets:
+            if f.location == self.world_c:
+                f.location = self.world_isolated
+        
+        self._run_full_turn_for_player_eot_phases(self.player1_obj)
+        self.assertIsNone(key_fleet_no_presence.owner, "Key should remain unowned if no player presence")
+
+    # --- 5. Character-Specific VP Calculation Tests (Per-Turn VPs) ---
+    def test_vp_empire_builder(self):
+        player_eb = self._create_player_for_test("TestEB", "Empire Builder")
+        # World 1: 100 pop (10 VP), 10 ind (10 VP), 5 mines (5 VP) = 25 VP
+        self._create_world_for_player(player_eb, id=201, name="EB_W1", population=100, industry=10, mines=5)
+        # World 2: 55 pop (5 VP), 3 ind (3 VP), 2 mines (2 VP) = 10 VP
+        self._create_world_for_player(player_eb, id=202, name="EB_W2", population=55, industry=3, mines=2)
+        # Total = 35 VP
+
+        # Simulate EOT VP calculation for this player
+        self.game.turn_vp_adjustments = {player_eb.user_id: 0} # No event VPs for this test
+        self._run_full_turn_for_player_eot_phases(player_eb)
+        self.assertEqual(player_eb.victory_points, 35)
+
+    def test_vp_merchant(self):
+        player_m = self._create_player_for_test("TestMerchant", "Merchant")
+        self._create_world_for_player(player_m, id=203, name="M_W1", population=100) # Merchants get 0 base VP
+        
+        self.game.turn_vp_adjustments = {player_m.user_id: 0}
+        self._run_full_turn_for_player_eot_phases(player_m)
+        self.assertEqual(player_m.victory_points, 0)
+
+    def test_vp_pirate(self):
+        player_p = self._create_player_for_test("TestPirate", "Pirate")
+        world = self._create_world_for_player(player_p, id=204, name="P_W1")
+        self._create_fleet_for_player(player_p, id=205, name="PF1", location=world, ships=1)
+        self._create_fleet_for_player(player_p, id=206, name="PF2", location=world, ships=1)
+        # 2 fleets * 3 VP/fleet = 6 VP
+
+        self.game.turn_vp_adjustments = {player_p.user_id: 0}
+        self._run_full_turn_for_player_eot_phases(player_p)
+        self.assertEqual(player_p.victory_points, 6)
+
+    def test_vp_artifact_collector(self):
+        player_ac = self._create_player_for_test("TestAC", "Artifact Collector")
+        world_ac = self._create_world_for_player(player_ac, id=207, name="AC_W1")
+        
+        # Artifacts:
+        # Ancient Pyramid: +90
+        # Ancient Lodestar (Ancient, non-Pyramid, non-Plastic): +30
+        # Platinum Pyramid (Pyramid, non-Ancient, non-Plastic): +30
+        # Plastic Crown (Plastic): +0
+        # Gold Shekel (Standard, non-Plastic, non-Ancient/Pyramid): +15
+        # Treasure of Polaris (Special): +30
+        # Nebula Scroll Volume 1 (Special, 0 base points): +0 in this calculation
+        # Total = 90 + 30 + 30 + 0 + 15 + 30 + 0 = 195
+
+        world_ac.artifacts.append(Artifact(id="V_AP", name="Ancient Pyramid", category="Standard", points=0)) # Points overridden by logic
+        world_ac.artifacts.append(Artifact(id="V_AL", name="Ancient Lodestar", category="Standard", points=5))
+        world_ac.artifacts.append(Artifact(id="V_PP", name="Platinum Pyramid", category="Standard", points=5))
+        world_ac.artifacts.append(Artifact(id="V_PC", name="Plastic Crown", category="Standard", points=-10, is_plastic=True))
+        world_ac.artifacts.append(Artifact(id="V_GS", name="Gold Shekel", category="Standard", points=5))
+        world_ac.artifacts.append(Artifact(id="V_TP", name="Treasure of Polaris", category="Special", points=20)) # Base points, but logic gives 30
+        world_ac.artifacts.append(Artifact(id="V_NS1", name="Nebula Scroll Volume 1", category="Special", points=0))
+
+        self.game.turn_vp_adjustments = {player_ac.user_id: 0}
+        self._run_full_turn_for_player_eot_phases(player_ac)
+        self.assertEqual(player_ac.victory_points, 195)
+
+    def test_vp_berserker(self):
+        player_b = self._create_player_for_test("TestBerserkerVP", "Berserker")
+        # World 1: Robot-controlled (robots > 0, pop=0, converts=0) = +5 VP
+        self._create_world_for_player(player_b, id=208, name="B_W1_Robo", robot_units=10, population=0, convert_units=0)
+        # World 2: Mixed pop, not robot-controlled = 0 VP
+        self._create_world_for_player(player_b, id=209, name="B_W2_Mixed", robot_units=5, population=5)
+        # World 3: Only pop, no robots = 0 VP
+        self._create_world_for_player(player_b, id=210, name="B_W3_Pop", population=10)
+        # Total = 5 VP
+
+        self.game.turn_vp_adjustments = {player_b.user_id: 0}
+        self._run_full_turn_for_player_eot_phases(player_b)
+        self.assertEqual(player_b.victory_points, 5)
+
+    def test_vp_apostle(self):
+        player_ap = self._create_player_for_test("TestApostleVP", "Apostle", user_id_override="apostle_vp_user")
+        
+        # World 1 (Owned by Apostle): +5 VP. Fully converted (converts>0, pop=0, robots=0) = +5 VP. Has 15 converts.
+        world_ap1 = self._create_world_for_player(player_ap, id=211, name="AP_W1", convert_units=15, converts_owner_id="apostle_vp_user", population=0, robot_units=0)
+        
+        # World 2 (Owned by Apostle): +5 VP. Not fully converted. Has 5 converts.
+        world_ap2 = self._create_world_for_player(player_ap, id=212, name="AP_W2", convert_units=5, converts_owner_id="apostle_vp_user", population=10)
+
+        # World 3 (Not owned by Apostle, but has Apostle's converts): No ownership VP. Has 20 converts.
+        world_other_converts = World(id=213, name="Other_Conv", owner=None, convert_units=20, converts_owner_id="apostle_vp_user", connections=[])
+        self.game.worlds.append(world_other_converts)
+
+        # Total converts for Apostle: 15 (W1) + 5 (W2) + 20 (W3) = 40 converts.
+        # VP from converts = 40 // 10 = +4 VP.
+        # Total VP = 5 (W1 owned) + 5 (W1 fully converted) + 5 (W2 owned) + 4 (total converts) = 19 VP.
+
+        self.game.turn_vp_adjustments = {player_ap.user_id: 0}
+        self._run_full_turn_for_player_eot_phases(player_ap)
+        self.assertEqual(player_ap.victory_points, 19)
+
+
+    # --- 6. Population Growth Tests ---
+    def test_population_growth_normal(self):
+        player_n = self.player1_obj # Merchant
+        world = self.world_a
+        world.owner = player_n # Ensure owner matches for growth logic in helper
+        world.population = 50
+        world.convert_units = 0 # Ensure no converts for normal growth test
+        world.max_population = 100
+        
+        self._run_full_turn_for_player_eot_phases(player_n) # Growth is 50 // 10 = 5
+        self.assertEqual(world.population, 55)
+
+        # Test max_population cap
+        world.population = 98
+        self._run_full_turn_for_player_eot_phases(player_n) # Growth is 98 // 10 = 9. Expected 98+9=107. Cap at 100.
+        self.assertEqual(world.population, 100) # Should cap at 100
+
+    def test_population_growth_apostle(self):
+        player_ap = self._create_player_for_test("TestApostleGrowth", "Apostle", "apostle_growth_user")
+        world = self._create_world_for_player(player_ap, id=214, name="AP_Grow", population=50, convert_units=0, max_population=100)
+        world.converts_owner_id = player_ap.user_id # Needs to be set for apostle logic
+
+        # Growth is 50 // 10 = 5. All 5 should convert from normal pop.
+        self._run_full_turn_for_player_eot_phases(player_ap)
+        self.assertEqual(world.population, 45) # 50 - 5
+        self.assertEqual(world.convert_units, 5)  # 0 + 5
+        self.assertEqual(world.converts_owner_id, player_ap.user_id)
+
+        # Test growth when some converts already exist, and converts some normal, grows some new
+        world.population = 20  # Pop 20
+        world.convert_units = 30 # Converts 30. Total 50.
+        world.max_population = 100
+        # Growth is (20+30)//10 = 5.
+        # Converts from normal: min(5, 20) = 5. Pop becomes 15. Converts become 35.
+        # Remaining growth capacity = 5 - 5 = 0. No new converts grown.
+        self._run_full_turn_for_player_eot_phases(player_ap)
+        self.assertEqual(world.population, 15) # 20 - 5
+        self.assertEqual(world.convert_units, 35) # 30 + 5
+
+    def test_population_growth_robots_no_growth(self):
+        player_b = self._create_player_for_test("TestBerserkerGrowth", "Berserker")
+        world = self._create_world_for_player(player_b, id=215, name="RoboNoGrow", robot_units=50, population=0, max_population=100)
+        
+        self._run_full_turn_for_player_eot_phases(player_b)
+        self.assertEqual(world.robot_units, 50) # Robots should not grow
+
+    def test_population_growth_at_max_pop(self):
+        player_n = self.player1_obj
+        world = self.world_a
+        world.owner = player_n
+        world.population = 100
+        world.max_population = 100
+        
+        self._run_full_turn_for_player_eot_phases(player_n)
+        self.assertEqual(world.population, 100) # Should not grow
+
+    def test_population_growth_minimum_one(self):
+        player_n = self.player1_obj
+        world = self.world_a
+        world.owner = player_n
+        world.population = 5 # Pop < 10 but > 0
+        world.convert_units = 0
+        world.max_population = 100
+        
+        self._run_full_turn_for_player_eot_phases(player_n) # Growth should be 1
+        self.assertEqual(world.population, 6)
+
+
+    # Helper to create a world and assign to player for VP/Growth tests
+    def _create_world_for_player(self, player: Player, id: int, name: str, 
+                                 population: int = 0, max_population: int = 100, 
+                                 industry: int = 0, mines: int = 0, stockpile: int = 0,
+                                 robot_units: int = 0, convert_units: int = 0, 
+                                 converts_owner_id: str | None = None,
+                                 iships: int = 0, pships: int = 0,
+                                 artifacts: list[Artifact] | None = None):
+        world = World(
+            id=id, name=name, owner=player, connections=[],
+            iships=iships, pships=pships, population=population,
+            max_population=max_population, industry=industry, mines=mines,
+            stockpile=stockpile, artifacts=artifacts if artifacts is not None else [],
+            robot_units=robot_units, convert_units=convert_units,
+            converts_owner_id=converts_owner_id
+        )
+        self.game.worlds.append(world)
+        player.worlds.append(world)
+        if not player.home_world:
+            player.home_world = world
+        return world
+
+    def _create_fleet_for_player(self, player: Player, id: int, name: str, location: World, ships: int = 0):
+        fleet = Fleet(id=id, name=name, owner=player, location=location, ships=ships)
+        self.game.fleets.append(fleet)
+        player.fleets.append(fleet)
+        return fleet
+
 
 if __name__ == '__main__':
     # This allows running the tests directly from this file
