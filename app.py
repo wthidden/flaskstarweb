@@ -1,9 +1,10 @@
 import random
 import json # Added for parsing JSON
 
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, Response
 from flask_login import LoginManager, UserMixin, login_user, current_user, logout_user, login_required # Added logout_user, login_required
 from werkzeug.security import generate_password_hash, check_password_hash # Already present, good
+import graphviz # Added for game state graph
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Needed for flash messages
@@ -42,7 +43,8 @@ class World:
                  stockpile: int,
                  artifacts: list['Artifact'] | None = None, # Type hint for artifacts
                  turns_owned: int = 0, is_black_hole: bool = False,
-                 robot_units: int = 0, convert_units: int = 0, converts_owner_id: str | None = None): 
+                 robot_units: int = 0, convert_units: int = 0, converts_owner_id: str | None = None,
+                 cg_unloads_count: int = 0): 
         self.id = id
         self.name = name
         self.owner: Player | None = owner
@@ -60,6 +62,7 @@ class World:
         self.robot_units = robot_units
         self.convert_units = convert_units
         self.converts_owner_id = converts_owner_id
+        self.cg_unloads_count = cg_unloads_count
 
 
 class Fleet:
@@ -115,6 +118,43 @@ class EmpireBuilder:
         vp += total_population // 10
         vp += total_industry
         vp += total_mines
+
+        # Artifact VPs for Empire Builder
+        # Preferred: "Platinum", "Crown". Greatest Treasure: "Platinum Crown"
+        artifact_vp = 0
+        owned_artifacts: list[Artifact] = []
+        for world in self.player.worlds:
+            if world.owner == self.player:
+                owned_artifacts.extend(world.artifacts)
+        for fleet in self.player.fleets:
+            if fleet.owner == self.player:
+                owned_artifacts.extend(fleet.artifacts)
+
+        for artifact in owned_artifacts:
+            if artifact.name == "Platinum Crown":
+                artifact_vp += 15
+                continue
+            if artifact.is_plastic:
+                artifact_vp -= 10
+                continue
+            
+            # Preferred categories
+            if artifact.first_word == "Platinum" or artifact.second_word == "Crown":
+                artifact_vp += 5
+                continue # Already processed as preferred
+
+            # Special Artifacts (non-AC specific points)
+            if artifact.name == "Treasure of Polaris":
+                artifact_vp += 20
+            elif artifact.name == "Slippers of Venus":
+                artifact_vp += 10
+            elif artifact.name == "Radioactive Isotope":
+                artifact_vp -= 30
+            elif artifact.name == "Lesser of Two Evils":
+                artifact_vp -= 15
+            # "The Black Box" and Nebula Scrolls give 0 VP in this general calculation
+
+        vp += artifact_vp
         return vp
 
 
@@ -132,7 +172,43 @@ class Merchant:
         Merchant VPs:
         - Return 0 for now (Action-based VPs will be implemented later).
         """
-        return 0
+        vp = 0 # Base VPs for Merchant are 0, will be based on actions.
+
+        # Artifact VPs for Merchant
+        # Preferred: "Gold", "Shekel". Greatest Treasure: "Gold Shekel"
+        artifact_vp = 0
+        owned_artifacts: list[Artifact] = []
+        for world in self.player.worlds:
+            if world.owner == self.player:
+                owned_artifacts.extend(world.artifacts)
+        for fleet in self.player.fleets:
+            if fleet.owner == self.player:
+                owned_artifacts.extend(fleet.artifacts)
+
+        for artifact in owned_artifacts:
+            if artifact.name == "Gold Shekel": # Greatest Treasure
+                artifact_vp += 15
+                continue
+            if artifact.is_plastic:
+                artifact_vp -= 10
+                continue
+            
+            if artifact.first_word == "Gold" or artifact.second_word == "Shekel": # Preferred
+                artifact_vp += 5
+                continue
+
+            # Special Artifacts
+            if artifact.name == "Treasure of Polaris":
+                artifact_vp += 20
+            elif artifact.name == "Slippers of Venus":
+                artifact_vp += 10
+            elif artifact.name == "Radioactive Isotope":
+                artifact_vp -= 30
+            elif artifact.name == "Lesser of Two Evils":
+                artifact_vp -= 15
+        
+        vp += artifact_vp
+        return vp
 
 
 class Pirate:
@@ -151,6 +227,41 @@ class Pirate:
         """
         vp = 0
         vp += len(self.player.fleets) * 3
+
+        # Artifact VPs for Pirate
+        # Preferred: "Silver", "Lodestar". Greatest Treasure: "Silver Lodestar"
+        artifact_vp = 0
+        owned_artifacts: list[Artifact] = []
+        for world in self.player.worlds:
+            if world.owner == self.player:
+                owned_artifacts.extend(world.artifacts)
+        for fleet in self.player.fleets:
+            if fleet.owner == self.player:
+                owned_artifacts.extend(fleet.artifacts)
+
+        for artifact in owned_artifacts:
+            if artifact.name == "Silver Lodestar": # Greatest Treasure
+                artifact_vp += 15
+                continue
+            if artifact.is_plastic:
+                artifact_vp -= 10
+                continue
+            
+            if artifact.first_word == "Silver" or artifact.second_word == "Lodestar": # Preferred
+                artifact_vp += 5
+                continue
+
+            # Special Artifacts
+            if artifact.name == "Treasure of Polaris":
+                artifact_vp += 20
+            elif artifact.name == "Slippers of Venus":
+                artifact_vp += 10
+            elif artifact.name == "Radioactive Isotope":
+                artifact_vp -= 30
+            elif artifact.name == "Lesser of Two Evils":
+                artifact_vp -= 15
+        
+        vp += artifact_vp
         return vp
 
 
@@ -230,6 +341,41 @@ class Berserker:
             if world.owner == self.player: # Ensure player owns the world
                 if world.robot_units > 0 and world.population == 0 and world.convert_units == 0:
                     vp += 5
+        
+        # Artifact VPs for Berserker
+        # Preferred: "Titanium", "Sphinx". Greatest Treasure: "Titanium Sphinx"
+        artifact_vp = 0
+        owned_artifacts: list[Artifact] = []
+        for world in self.player.worlds:
+            if world.owner == self.player:
+                owned_artifacts.extend(world.artifacts)
+        for fleet in self.player.fleets:
+            if fleet.owner == self.player:
+                owned_artifacts.extend(fleet.artifacts)
+
+        for artifact in owned_artifacts:
+            if artifact.name == "Titanium Sphinx": # Greatest Treasure
+                artifact_vp += 15
+                continue
+            if artifact.is_plastic:
+                artifact_vp -= 10
+                continue
+            
+            if artifact.first_word == "Titanium" or artifact.second_word == "Sphinx": # Preferred
+                artifact_vp += 5
+                continue
+
+            # Special Artifacts
+            if artifact.name == "Treasure of Polaris":
+                artifact_vp += 20
+            elif artifact.name == "Slippers of Venus":
+                artifact_vp += 10
+            elif artifact.name == "Radioactive Isotope":
+                artifact_vp -= 30
+            elif artifact.name == "Lesser of Two Evils":
+                artifact_vp -= 15
+        
+        vp += artifact_vp
         return vp
 
 
@@ -312,7 +458,41 @@ class Apostle:
                 total_apostle_converts += world.convert_units
         
         vp += total_apostle_converts // 10
+
+        # Artifact VPs for Apostle
+        # Preferred: "Blessed", "Stardust". Greatest Treasure: "Blessed Stardust"
+        artifact_vp = 0
+        owned_artifacts: list[Artifact] = []
+        for world in self.player.worlds:
+            if world.owner == self.player:
+                owned_artifacts.extend(world.artifacts)
+        for fleet in self.player.fleets:
+            if fleet.owner == self.player:
+                owned_artifacts.extend(fleet.artifacts)
+
+        for artifact in owned_artifacts:
+            if artifact.name == "Blessed Stardust": # Greatest Treasure
+                artifact_vp += 15
+                continue
+            if artifact.is_plastic:
+                artifact_vp -= 10
+                continue
+            
+            if artifact.first_word == "Blessed" or artifact.second_word == "Stardust": # Preferred
+                artifact_vp += 5
+                continue
+
+            # Special Artifacts
+            if artifact.name == "Treasure of Polaris":
+                artifact_vp += 20
+            elif artifact.name == "Slippers of Venus":
+                artifact_vp += 10
+            elif artifact.name == "Radioactive Isotope":
+                artifact_vp -= 30
+            elif artifact.name == "Lesser of Two Evils":
+                artifact_vp -= 15
         
+        vp += artifact_vp
         return vp
 
 # Artifact Class
@@ -1103,16 +1283,56 @@ class Game:
 
         fleet.cargo -= amount_to_unload
         msg_action = ""
+        vp_gain_for_unload = 0
+        event_message_suffix = ""
 
-        if not order.as_consumer_goods:
-            # TODO: Consider timing issues if metal is also used for building in the same turn.
-            world.stockpile += amount_to_unload
-            msg_action = f"to stockpile at world {world.name} (ID: {order.world_id})."
-        else:
-            msg_action = f"as consumer goods at world {world.name} (ID: {order.world_id})."
+        if fleet.owner and fleet.owner.character_type == "Merchant":
+            if not order.as_consumer_goods:
+                # Metal Unload VP
+                if world.owner != fleet.owner and world.owner is not None and world.industry > 0:
+                    max_metal_for_points = world.industry * 2
+                    metal_unloaded_for_points = min(amount_to_unload, max_metal_for_points)
+                    vp_gain_for_unload = metal_unloaded_for_points * 8
+                    
+                    if vp_gain_for_unload > 0:
+                        if fleet.owner.user_id not in self.turn_vp_adjustments:
+                            self.turn_vp_adjustments[fleet.owner.user_id] = 0
+                        self.turn_vp_adjustments[fleet.owner.user_id] += vp_gain_for_unload
+                        event_message_suffix = f" Merchant {fleet.owner.name} gained {vp_gain_for_unload} VP."
+                        self.add_turn_event(fleet.owner.user_id, f"Gained {vp_gain_for_unload} VP for unloading {metal_unloaded_for_points} metal at {world.name} (ID: {world.id}).")
+                
+                world.stockpile += amount_to_unload
+                msg_action = f"to stockpile at world {world.name} (ID: {order.world_id})."
+
+            else: # Consumer Goods Unload VP
+                world.cg_unloads_count += 1
+                cg_vp_map = {1: 10, 2: 8, 3: 5, 4: 3}
+                vp_gain_for_unload = cg_vp_map.get(world.cg_unloads_count, 1) # Default to 1 VP for 5th+ unload
+
+                if vp_gain_for_unload > 0:
+                    if fleet.owner.user_id not in self.turn_vp_adjustments:
+                        self.turn_vp_adjustments[fleet.owner.user_id] = 0
+                    self.turn_vp_adjustments[fleet.owner.user_id] += vp_gain_for_unload
+                    event_message_suffix = f" Merchant {fleet.owner.name} gained {vp_gain_for_unload} VP."
+                    self.add_turn_event(fleet.owner.user_id, f"Gained {vp_gain_for_unload} VP for unloading Consumer Goods at {world.name} (ID: {world.id}) (Unload #{world.cg_unloads_count}).")
+
+                msg_action = f"as consumer goods at world {world.name} (ID: {order.world_id})."
         
-        msg = f"Successfully unloaded {amount_to_unload} metal from fleet {fleet.name} (ID: {order.fleet_id}) {msg_action}"
-        # print(msg) # Server log
+        else: # Not a merchant or fleet has no owner
+            if not order.as_consumer_goods:
+                world.stockpile += amount_to_unload
+                msg_action = f"to stockpile at world {world.name} (ID: {order.world_id})."
+            else:
+                # Non-merchants can unload CGs, but cg_unloads_count should still track for future merchant unloads.
+                # However, the current problem description implies only Merchants get points for this action.
+                # If non-merchants are meant to increment cg_unloads_count, this needs clarification.
+                # For now, assuming only Merchant unloads of CGs are "counted" for VP sequence.
+                # Let's adjust: cg_unloads_count is a world property, should always increment.
+                if order.as_consumer_goods: # Check this again for clarity
+                    world.cg_unloads_count += 1 # Increment for any CG unload
+                msg_action = f"as consumer goods at world {world.name} (ID: {order.world_id})."
+
+        msg = f"Successfully unloaded {amount_to_unload} metal from fleet {fleet.name} (ID: {order.fleet_id}) {msg_action}{event_message_suffix}"
         return True, msg
 
     def execute_load_cargo_order(self, order: LoadCargoOrder) -> tuple[bool, str]:
@@ -1196,8 +1416,8 @@ class Game:
         if current_player.character_type == "Apostle":
             # current_player.victory_points -= 1 # Direct modification removed
             if current_player.user_id not in self.turn_vp_adjustments: self.turn_vp_adjustments[current_player.user_id] = 0
-            self.turn_vp_adjustments[current_player.user_id] -= 1
-            self.add_turn_event(current_player.user_id, "Lost 1 VP (event) for initiating combat as Apostle.")
+            # Penalty is num_shots * -1 VP. num_shots is calculated later, so we'll apply this after num_shots is known.
+            # For now, just note that an Apostle is firing. The actual VP adjustment will be done after num_shots is calculated.
         
         # Reset attacker's ambush status if they were ambushing
         if firing_fleet.is_ambushing:
@@ -1247,6 +1467,13 @@ class Game:
         num_shots = num_effective_ships
         if num_shots <= 0:
             return False, f"Fire Order Error: Fleet {firing_fleet.name} has no ships capable of firing (0 effective ships)."
+
+        # Apply Apostle Firing Penalty (now that num_shots is known)
+        if current_player.character_type == "Apostle":
+            apostle_penalty_vp = num_shots * -1
+            if current_player.user_id not in self.turn_vp_adjustments: self.turn_vp_adjustments[current_player.user_id] = 0
+            self.turn_vp_adjustments[current_player.user_id] += apostle_penalty_vp
+            self.add_turn_event(current_player.user_id, f"Lost {abs(apostle_penalty_vp)} VP (event) for firing {num_shots} shots as Apostle.")
 
         # Targeting Logic
         message_parts = [f"Fleet {firing_fleet.name} (Player {current_player.name}) fires {num_shots} shots at {world.name} targeting {order.target_type}."]
@@ -1383,6 +1610,18 @@ class Game:
                         world.convert_units -= killed_converts
                         killed_this_pass += killed_converts
                         message_parts.append(f"Killed {killed_converts} convert units at {world.name}.")
+
+                        # Apostle Martyr Points
+                        if world.converts_owner_id is not None and world.converts_owner_id != current_player.user_id:
+                            martyr_apostle = self.get_player_by_user_id(world.converts_owner_id)
+                            if martyr_apostle and martyr_apostle.character_type == "Apostle":
+                                martyr_vp_gain = killed_converts * 1
+                                if martyr_apostle.user_id not in self.turn_vp_adjustments:
+                                    self.turn_vp_adjustments[martyr_apostle.user_id] = 0
+                                self.turn_vp_adjustments[martyr_apostle.user_id] += martyr_vp_gain
+                                self.add_turn_event(martyr_apostle.user_id, f"Gained {martyr_vp_gain} VP (event) for martyrs killed at world {world.name} (ID: {world.id}).")
+                                message_parts.append(f"Apostle {martyr_apostle.name} gained {martyr_vp_gain} VP for martyrs.")
+
                         if world.convert_units == 0: world.converts_owner_id = None # If all converts of an apostle are gone
 
                 # Kill Robot Units (if still capacity to kill)
@@ -1720,6 +1959,9 @@ class Game:
             if fleet.location != source_world:
                 return False, f"Attach Artifact Error: Fleet {fleet.name} is not at source world {source_world.name}."
         else: # Artifact must be on another fleet of the player at the same location
+            if current_player.character_type != "Artifact Collector":
+                return False, f"Attach Artifact Error: Only Artifact Collectors can directly transfer artifacts between their own fleets. Player {current_player.name} is a {current_player.character_type}."
+            
             found_on_other_fleet = False
             for other_fleet in current_player.fleets:
                 if other_fleet.id == fleet.id: continue # Don't check the target fleet itself
@@ -2729,3 +2971,85 @@ def logout():
 if __name__ == '__main__':
     app.wsgi_app = StarWeb(app.wsgi_app)
     app.run()
+
+
+@app.route('/admin/game_state_graph.svg')
+@login_required
+def admin_game_state_graph_svg():
+    if not current_user.is_admin:
+        return "Unauthorized", 403
+
+    game = get_or_create_game()
+    dot = graphviz.Digraph(comment='StarWeb Game State', graph_attr={'rankdir': 'LR', 'size': '12,8', 'ratio':'fill'})
+
+    # Players
+    for player in game.players:
+        dot.node(f"player_{player.user_id}", f"{player.name}\n({player.character_type})\nVP: {player.victory_points}", 
+                 shape="ellipse", style="filled", color="lightblue")
+
+    # Worlds
+    for world in game.worlds:
+        owner_name = world.owner.name if world.owner else "Unowned"
+        label = f"W{world.id}: {world.name}\nOwner: {owner_name}\nPop: {world.population} Ind: {world.industry} Mines: {world.mines}\nStock: {world.stockpile} Ships: I{world.iships} P{world.pships}"
+        if world.is_black_hole:
+            label += "\n(Black Hole)"
+            dot.node(f"world_{world.id}", label, shape="box", style="filled", color="black", fontcolor="white")
+        else:
+            dot.node(f"world_{world.id}", label, shape="box", style="filled", color="lightgrey")
+        
+        # Player Ownership (Worlds)
+        if world.owner:
+            dot.edge(f"player_{world.owner.user_id}", f"world_{world.id}", label="owns", dir="forward", color="blue")
+
+    # Fleets
+    for fleet in game.fleets:
+        owner_name = fleet.owner.name if fleet.owner else "Unowned"
+        label = f"F{fleet.id}: {fleet.name}\nOwner: {owner_name}\nShips: {fleet.ships} Cargo: {fleet.cargo}"
+        if fleet.is_ambushing: label += "\n(Ambushing)"
+        if fleet.is_at_peace: label += "\n(Peace)"
+        dot.node(f"fleet_{fleet.id}", label, shape="septagon", style="filled", color="lightgreen")
+
+        # Player Ownership (Fleets)
+        if fleet.owner:
+            dot.edge(f"player_{fleet.owner.user_id}", f"fleet_{fleet.id}", label="owns", dir="forward", color="green")
+        
+        # Fleet Location
+        if fleet.location:
+            dot.edge(f"fleet_{fleet.id}", f"world_{fleet.location.id}", label="located_at", dir="forward", color="darkgreen", style="dashed")
+
+    # World Connections (ensure no duplicates and only one direction for clarity in Digraph)
+    processed_connections = set()
+    for world in game.worlds:
+        for connected_world in world.connections:
+            # Ensure edge is added only once, e.g., (w1, w2) and not (w2, w1) again
+            if tuple(sorted((world.id, connected_world.id))) not in processed_connections:
+                dot.edge(f"world_{world.id}", f"world_{connected_world.id}", dir="none", color="grey", style="bold")
+                processed_connections.add(tuple(sorted((world.id, connected_world.id))))
+    
+    # Generate SVG
+    # The graphviz library on the system might not have a direct pipe-to-string option for SVG easily
+    # or might require specific setup for fonts if not found.
+    # A common way to get SVG is to render to a file and read it, or use specific methods if available.
+    # For simplicity, let's assume `dot.pipe()` works as intended to produce UTF-8 encoded SVG string.
+    # If `graphviz` is the Python library, `dot.pipe(format='svg')` returns bytes.
+    try:
+        svg_output_bytes = dot.pipe(format='svg')
+        svg_output = svg_output_bytes.decode('utf-8')
+        return Response(svg_output, mimetype='image/svg+xml')
+    except graphviz.backend.execute.ExecutableNotFound:
+        # This error occurs if the graphviz binaries (dot, etc.) are not in the system PATH
+        error_message = "Graphviz executables not found. Please ensure Graphviz is installed and in your system's PATH."
+        # Log this error on the server for the admin to see
+        app.logger.error(error_message)
+        # Return a user-friendly error image or message
+        # For now, returning a simple text error as SVG
+        error_svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100">
+                        <text x="10" y="50" font-family="Arial" font-size="12" fill="red">{error_message}</text>
+                       </svg>'''
+        return Response(error_svg, mimetype='image/svg+xml', status=500)
+    except Exception as e:
+        app.logger.error(f"Error generating SVG graph: {e}")
+        error_svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100">
+                        <text x="10" y="50" font-family="Arial" font-size="12" fill="red">Error generating graph: {str(e)}</text>
+                       </svg>'''
+        return Response(error_svg, mimetype='image/svg+xml', status=500)

@@ -364,6 +364,16 @@
 
         <hr>
 
+        {% if is_admin_view %}
+        <section id="admin-graph-view">
+            <h2>Admin Game State Graph</h2>
+            <div id="adminGraphContainer" style="width: 100%; overflow: auto; text-align: center; border: 1px solid #ccc; padding: 10px; margin-top: 20px;">
+                <img src="{{ url_for('admin_game_state_graph_svg') }}" alt="Game State Graph" style="max-width: 100%; height: auto;">
+            </div>
+        </section>
+        <hr>
+        {% endif %}
+
         <section id="turn-planning">
             <h2>Plan Your Turn</h2>
             <form id="turnForm" method="POST" action="{{ url_for('submit_turn') }}">
