@@ -5,8 +5,9 @@ import os
 # Adjust the path to import from the parent directory (project root)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app import Game, World, Fleet, Player, User # Added User for _register_new_player_setup
+from app import Game, World, Fleet, Player, User, Artifact # Added User for _register_new_player_setup, Artifact
 from app import MoveOrder, TransferOrder, LoadCargoOrder, UnloadCargoOrder, order_from_dict
+from app import AttachArtifactOrder, DropArtifactOrder, AmbushOrder, SetAllyOrder, GiftWorldOrder, GiftFleetOrder # Import new order classes
 from app import create_game, assign_homeworld_to_player, assign_starting_fleets_to_player, ALL_ARTIFACTS # Added game setup functions and ALL_ARTIFACTS
 import random # For artifact distribution check
 
@@ -843,18 +844,39 @@ class TestGameCommands(unittest.TestCase):
             from app import FireOrder # Ensure it's imported
             if isinstance(order, FireOrder):
                 return self.game.execute_fire_order(order, player)
-        
-        # Fallback if specific isinstance checks didn't catch it (e.g. if only base Order was passed with type string)
-        if not (isinstance(order, MoveOrder) or isinstance(order, TransferOrder) or \
-                isinstance(order, LoadCargoOrder) or isinstance(order, UnloadCargoOrder) or \
-                isinstance(order, BuildOrder) or isinstance(order, FireOrder)):
+        elif order.order_type == "ATTACH_ARTIFACT":
+            if isinstance(order, AttachArtifactOrder):
+                return self.game.execute_attach_artifact_order(order, player)
+        elif order.order_type == "DROP_ARTIFACT":
+            if isinstance(order, DropArtifactOrder):
+                return self.game.execute_drop_artifact_order(order, player)
+        elif order.order_type == "AMBUSH":
+            if isinstance(order, AmbushOrder):
+                return self.game.execute_ambush_order(order, player)
+        elif order.order_type == "SET_ALLY":
+            if isinstance(order, SetAllyOrder):
+                return self.game.execute_set_ally_order(order, player)
+        elif order.order_type == "GIFT_WORLD":
+            if isinstance(order, GiftWorldOrder):
+                return self.game.execute_gift_world_order(order, player)
+        elif order.order_type == "GIFT_FLEET":
+            if isinstance(order, GiftFleetOrder):
+                return self.game.execute_gift_fleet_order(order, player)
+
+        # Fallback for comprehensive check
+        known_order_types = (
+            MoveOrder, TransferOrder, LoadCargoOrder, UnloadCargoOrder,
+            BuildOrder, FireOrder, AttachArtifactOrder, DropArtifactOrder,
+            AmbushOrder, SetAllyOrder, GiftWorldOrder, GiftFleetOrder
+        )
+        if not isinstance(order, known_order_types):
              raise ValueError(f"Order type {type(order)} (or string type '{order.order_type}') not supported by _process_single_order helper in test.")
         
         # Should have been caught by one of the isinstance or order_type string checks above
-        return False, "Unhandled order type in _process_single_order"
+        return False, f"Unhandled order type in _process_single_order: {type(order)}"
 
 
-    # --- 1. Building Tests (Added based on subtask) ---
+    # --- 1. Building Tests (Existing) ---
     def test_build_ships_fleet(self):
         from app import BuildOrder # Ensure BuildOrder is available
         player1 = self.player1_obj # Merchant, but for basic build, type doesn't change cost of ships
@@ -1923,6 +1945,219 @@ class TestGameCommands(unittest.TestCase):
         
         self.assertTrue(found_key_y_capture_event, "Player A events should contain Key Y capture message.")
         self.assertTrue(found_mine_increase_event, "Player A events should contain World M mine increase message.")
+
+    # --- Test Artifact Management ---
+    def test_attach_artifact_order(self):
+        player = self.player1_obj
+        fleet = self.fleet1 # P1's fleet, at world_a
+        world_with_artifact = self.world_a # P1's world
+        
+        # Ensure ALL_ARTIFACTS is populated for get_artifact_by_id
+        if not ALL_ARTIFACTS: self.fail("ALL_ARTIFACTS list is empty. Cannot run artifact tests.")
+        test_artifact = ALL_ARTIFACTS[0] # Pick first available global artifact
+        
+        world_with_artifact.artifacts = [test_artifact] # Place artifact on the world
+        fleet.artifacts = [] # Ensure fleet starts with no artifacts
+
+        # Valid attach
+        attach_order = AttachArtifactOrder(player_id=player.user_id, fleet_id=fleet.id, artifact_id=test_artifact.id, world_id=world_with_artifact.id)
+        success, msg = self._process_single_order(attach_order, player)
+        self.assertTrue(success, f"Attach artifact failed: {msg}")
+        self.assertIn(test_artifact, fleet.artifacts)
+        self.assertNotIn(test_artifact, world_with_artifact.artifacts)
+        # Check for event (assuming add_turn_event is called by execute method)
+        # self.assertIn(f"Artifact {test_artifact.name} attached to fleet {fleet.name}", self.game.get_and_clear_turn_events(player.user_id)[-1])
+
+
+        # Edge Case: Artifact not on world
+        world_with_artifact.artifacts = [] # Remove artifact
+        attach_order_fail = AttachArtifactOrder(player_id=player.user_id, fleet_id=fleet.id, artifact_id=test_artifact.id, world_id=world_with_artifact.id)
+        success, msg = self._process_single_order(attach_order_fail, player)
+        self.assertFalse(success, f"Attach should fail if artifact not on world: {msg}")
+
+        # Edge Case: Fleet not found (using a dummy ID)
+        attach_order_no_fleet = AttachArtifactOrder(player_id=player.user_id, fleet_id=999, artifact_id=test_artifact.id, world_id=world_with_artifact.id)
+        world_with_artifact.artifacts = [test_artifact] # Put artifact back for this test
+        success, msg = self._process_single_order(attach_order_no_fleet, player)
+        self.assertFalse(success, f"Attach should fail if fleet not found: {msg}")
+        self.assertIn(test_artifact, world_with_artifact.artifacts) # Artifact should remain on world
+
+        # Edge Case: Player doesn't own fleet
+        other_player_fleet = self.fleet4_p2_at_a # Belongs to player2_obj
+        other_player_fleet.location = world_with_artifact # Move to same world for test
+        attach_order_wrong_owner = AttachArtifactOrder(player_id=player.user_id, fleet_id=other_player_fleet.id, artifact_id=test_artifact.id, world_id=world_with_artifact.id)
+        success, msg = self._process_single_order(attach_order_wrong_owner, player)
+        self.assertFalse(success, f"Attach should fail if player doesn't own fleet: {msg}")
+
+
+    def test_drop_artifact_order(self):
+        player = self.player1_obj
+        fleet_with_artifact = self.fleet1 # P1's fleet at world_a
+        target_world = self.world_a # P1's world
+        
+        if not ALL_ARTIFACTS: self.fail("ALL_ARTIFACTS list is empty.")
+        test_artifact = ALL_ARTIFACTS[1] # Use a different artifact
+        
+        fleet_with_artifact.artifacts = [test_artifact]
+        target_world.artifacts = []
+
+        # Valid drop
+        drop_order = DropArtifactOrder(player_id=player.user_id, fleet_id=fleet_with_artifact.id, artifact_id=test_artifact.id, world_id=target_world.id)
+        success, msg = self._process_single_order(drop_order, player)
+        self.assertTrue(success, f"Drop artifact failed: {msg}")
+        self.assertIn(test_artifact, target_world.artifacts)
+        self.assertNotIn(test_artifact, fleet_with_artifact.artifacts)
+        # self.assertIn(f"Artifact {test_artifact.name} dropped from fleet {fleet_with_artifact.name}", self.game.get_and_clear_turn_events(player.user_id)[-1])
+
+        # Edge Case: Fleet doesn't have artifact
+        fleet_with_artifact.artifacts = [] # Remove artifact
+        drop_order_fail = DropArtifactOrder(player_id=player.user_id, fleet_id=fleet_with_artifact.id, artifact_id=test_artifact.id, world_id=target_world.id)
+        success, msg = self._process_single_order(drop_order_fail, player)
+        self.assertFalse(success, f"Drop should fail if fleet doesn't have artifact: {msg}")
+        
+        # Edge Case: Target world not found
+        fleet_with_artifact.artifacts = [test_artifact] # Put artifact back
+        drop_order_no_world = DropArtifactOrder(player_id=player.user_id, fleet_id=fleet_with_artifact.id, artifact_id=test_artifact.id, world_id=999)
+        success, msg = self._process_single_order(drop_order_no_world, player)
+        self.assertFalse(success, f"Drop should fail if target world not found: {msg}")
+        self.assertIn(test_artifact, fleet_with_artifact.artifacts) # Artifact should remain on fleet
+
+    # --- Test Ambush Command ---
+    def test_set_ambush_order(self):
+        player = self.player1_obj
+        fleet = self.fleet1 # P1's fleet at world_a
+        world = self.world_a
+
+        self.assertFalse(fleet.is_ambushing) # Pre-condition
+        ambush_order = AmbushOrder(player_id=player.user_id, fleet_id=fleet.id, world_id=world.id)
+        success, msg = self._process_single_order(ambush_order, player)
+        self.assertTrue(success, f"Set ambush failed: {msg}")
+        self.assertTrue(fleet.is_ambushing)
+        # self.assertIn(f"Fleet {fleet.name} is now set to ambush", self.game.get_and_clear_turn_events(player.user_id)[-1])
+
+        # Validation: Fleet not at world
+        other_world = self.world_b
+        ambush_order_wrong_loc = AmbushOrder(player_id=player.user_id, fleet_id=fleet.id, world_id=other_world.id)
+        fleet.is_ambushing = False # Reset
+        success, msg = self._process_single_order(ambush_order_wrong_loc, player)
+        self.assertFalse(success, f"Set ambush should fail if fleet not at world: {msg}")
+        self.assertFalse(fleet.is_ambushing)
+
+    def test_ambush_combat_advantage(self):
+        from app import FireOrder # Ensure FireOrder is available
+        attacker = self.player2_obj # P2
+        defender = self.player1_obj # P1
+
+        combat_world = self.world_b # Neutral world
+        
+        attacker_fleet = self.fleet4_p2_at_a # P2's fleet
+        attacker_fleet.location = combat_world
+        attacker_fleet.ships = 10
+        attacker_fleet.cargo = 0
+
+        defender_fleet_ambushing = self.fleet1 # P1's fleet
+        defender_fleet_ambushing.location = combat_world
+        defender_fleet_ambushing.ships = 10
+        defender_fleet_ambushing.cargo = 0
+        defender_fleet_ambushing.is_ambushing = True # Defender is ambushing
+
+        # Attacker fires at defender. Defender (ambusher) should fire first.
+        # Defender: 10 ships, 0 cargo. Attacker: 10 ships, 0 cargo.
+        # Defender fires 10 shots -> Attacker takes 10/2 = 5 ship losses. Attacker ships = 5.
+        # Attacker (now 5 ships) fires 5 shots -> Defender takes 5/2 = 2 ship losses (rounded down). Defender ships = 8.
+        fire_order = FireOrder(firing_fleet_id=attacker_fleet.id, target_type="FLEET", world_id=combat_world.id, target_id=defender_fleet_ambushing.id)
+        
+        # Clear events before processing
+        self.game.turn_events = {}
+        self.game.turn_vp_adjustments = {}
+
+        success, msg = self._process_single_order(fire_order, attacker)
+        
+        self.assertTrue(success, f"Ambush combat failed: {msg}")
+        self.assertEqual(attacker_fleet.ships, 5, f"Attacker ships incorrect: {msg}")
+        self.assertEqual(defender_fleet_ambushing.ships, 8, f"Defender ships incorrect: {msg}") # 10 - floor(5/2) = 8
+        self.assertFalse(defender_fleet_ambushing.is_ambushing, "Defender ambush status should be reset")
+        
+        # Check events
+        # attacker_events = self.game.get_and_clear_turn_events(attacker.user_id)
+        # defender_events = self.game.get_and_clear_turn_events(defender.user_id)
+        # self.assertTrue(any(f"Target fleet {defender_fleet_ambushing.name} was ambushing!" in e for e in attacker_events))
+        # self.assertTrue(any(f"Ambusher {defender_fleet_ambushing.name} fires" in e for e in attacker_events))
+
+
+    def test_ambush_resets_if_not_triggered(self):
+        player = self.player1_obj
+        fleet = self.fleet1
+        fleet.location = self.world_a
+        fleet.is_ambushing = True
+
+        # Simulate end of turn processing for this player
+        self._run_full_turn_for_player_eot_phases(player)
+        self.assertFalse(fleet.is_ambushing, "Fleet ambush status should be reset at end of turn if not triggered.")
+
+    # --- Test Diplomacy Commands ---
+    def test_set_ally_order(self):
+        player1 = self.player1_obj
+        player2 = self.player2_obj
+
+        self.assertNotIn(player2.user_id, player1.allies) # Pre-condition
+        
+        set_ally_order = SetAllyOrder(player_id=player1.user_id, target_player_id=player2.user_id)
+        success, msg = self._process_single_order(set_ally_order, player1)
+        self.assertTrue(success, msg)
+        self.assertIn(player2.user_id, player1.allies)
+        # Check events
+        # p1_events = self.game.get_and_clear_turn_events(player1.user_id)
+        # p2_events = self.game.get_and_clear_turn_events(player2.user_id)
+        # self.assertTrue(any(f"You have declared an alliance with {player2.name}" in e for e in p1_events))
+        # self.assertTrue(any(f"{player1.name} has declared an alliance with you" in e for e in p2_events))
+
+
+        # Cannot ally self
+        set_ally_self = SetAllyOrder(player_id=player1.user_id, target_player_id=player1.user_id)
+        success, msg = self._process_single_order(set_ally_self, player1)
+        self.assertFalse(success, "Should not be able to ally with self.")
+
+    def test_gift_world_order(self):
+        giver = self.player1_obj
+        recipient = self.player2_obj
+        world_to_gift = self.world_a # Owned by P1
+        world_to_gift.convert_units = 5 # Add some converts for testing
+        world_to_gift.converts_owner_id = giver.user_id
+
+        initial_giver_worlds_count = len(giver.worlds)
+        initial_recipient_worlds_count = len(recipient.worlds)
+
+        gift_order = GiftWorldOrder(player_id=giver.user_id, world_id=world_to_gift.id, recipient_player_id=recipient.user_id)
+        success, msg = self._process_single_order(gift_order, giver)
+        self.assertTrue(success, msg)
+        self.assertEqual(world_to_gift.owner, recipient)
+        self.assertEqual(world_to_gift.turns_owned, 1)
+        self.assertIn(world_to_gift, recipient.worlds)
+        self.assertNotIn(world_to_gift, giver.worlds)
+        self.assertEqual(len(giver.worlds), initial_giver_worlds_count - 1)
+        self.assertEqual(len(recipient.worlds), initial_recipient_worlds_count + 1)
+        
+        # Test convert handling (recipient is Empire Builder, not Apostle)
+        self.assertEqual(world_to_gift.convert_units, 0, "Converts should be disbanded if recipient is not their Apostle master.")
+        self.assertIsNone(world_to_gift.converts_owner_id)
+
+    def test_gift_fleet_order(self):
+        giver = self.player1_obj
+        recipient = self.player2_obj
+        fleet_to_gift = self.fleet1 # Owned by P1
+
+        initial_giver_fleets_count = len(giver.fleets)
+        initial_recipient_fleets_count = len(recipient.fleets)
+
+        gift_order = GiftFleetOrder(player_id=giver.user_id, fleet_id=fleet_to_gift.id, recipient_player_id=recipient.user_id)
+        success, msg = self._process_single_order(gift_order, giver)
+        self.assertTrue(success, msg)
+        self.assertEqual(fleet_to_gift.owner, recipient)
+        self.assertIn(fleet_to_gift, recipient.fleets)
+        self.assertNotIn(fleet_to_gift, giver.fleets)
+        self.assertEqual(len(giver.fleets), initial_giver_fleets_count - 1)
+        self.assertEqual(len(recipient.fleets), initial_recipient_fleets_count + 1)
 
 
 if __name__ == '__main__':

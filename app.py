@@ -19,7 +19,7 @@ game = None  # Global game instance
 
 character_types = {"Empire Builder", "Merchant", "Pirate", "Artifact Collector", "Berserker", "Apostle"}
 
-player_commands = {"Transfer", "Build", "Move", "Fire", "Ambush", "Gift", "Trade", "Diplomacy", "Research", "End Turn"}
+player_commands = {"Transfer", "Build", "Move", "Fire", "Ambush", "Gift", "Trade", "Diplomacy", "Research", "End Turn", "ATTACH_ARTIFACT", "DROP_ARTIFACT", "AMBUSH", "SET_ALLY", "GIFT_WORLD", "GIFT_FLEET"}
 
 
 class StarWeb:
@@ -76,6 +76,7 @@ class Fleet:
         self.cargo = cargo
         self.artifacts: list[Artifact] = artifacts if artifacts is not None else []
         self.is_at_peace = is_at_peace
+        self.is_ambushing = False # Added for Ambush orders
 
     def get_max_cargo_capacity(self) -> int:
         """Calculates max cargo based on ship count and owner type."""
@@ -266,7 +267,13 @@ class Player:
             return Berserker(player=self)
         elif self.character_type == "Apostle":
             return Apostle(player=self)
+        # Ensure ArtifactCollector is handled, it was already there but good to double check
+        elif self.character_type == "Artifact Collector":
+            return ArtifactCollector(player=self)
         else:
+            # This case should ideally not be hit if character_type is validated upon Player creation
+            # or if there's a default character. For now, returning None is consistent.
+            print(f"Warning: Player {self.name} has unhandled character_type: {self.character_type}")
             return None
 
 # Apostle Class (New)
@@ -388,6 +395,8 @@ for name, points_val in SPECIAL_ARTIFACT_NAMES_AND_POINTS.items():
     ))
     artifact_id_counter += 1
 
+
+from orders import AttachArtifactOrder, DropArtifactOrder, AmbushOrder, SetAllyOrder, GiftWorldOrder, GiftFleetOrder # Import new order classes
 
 # Order Classes
 
@@ -1189,6 +1198,11 @@ class Game:
             if current_player.user_id not in self.turn_vp_adjustments: self.turn_vp_adjustments[current_player.user_id] = 0
             self.turn_vp_adjustments[current_player.user_id] -= 1
             self.add_turn_event(current_player.user_id, "Lost 1 VP (event) for initiating combat as Apostle.")
+        
+        # Reset attacker's ambush status if they were ambushing
+        if firing_fleet.is_ambushing:
+            firing_fleet.is_ambushing = False
+            # No specific message for attacker losing ambush status, it's implicit in attacking.
 
 
         # Conditional Fire (Simplified: no firing for now)
@@ -1251,7 +1265,50 @@ class Game:
             if target_fleet.is_at_peace: # Cannot target fleet at peace
                  return False, f"Fire Order Error (FLEET): Cannot target fleet {target_fleet.name} as it is at peace."
 
+            # AMBUSH RESPONSE LOGIC
+            # If the target_fleet is ambushing and owned by a different player, it fires first.
+            if target_fleet.is_ambushing and target_fleet.owner and target_fleet.owner != current_player:
+                message_parts.append(f"Target fleet {target_fleet.name} (ID: {target_fleet.id}) was ambushing!")
+                
+                # Target fleet (ambusher) fires at the original attacker (firing_fleet)
+                num_ambush_shots = target_fleet.ships # Simplified: all ships fire, no merchant penalty for ambusher for now
+                if num_ambush_shots > 0:
+                    ambush_hits_per_ship = 1 if firing_fleet.cargo > 0 else 2 # How many hits to destroy one of attacker's ships
+                    ambush_ships_destroyed_potential = num_ambush_shots // ambush_hits_per_ship
+                    actual_ambush_ships_lost_by_attacker = min(ambush_ships_destroyed_potential, firing_fleet.ships)
+                    
+                    firing_fleet.ships -= actual_ambush_ships_lost_by_attacker
+                    message_parts.append(
+                        f"Ambusher {target_fleet.name} fires {num_ambush_shots} shots back at {firing_fleet.name}, "
+                        f"destroying {actual_ambush_ships_lost_by_attacker} ships."
+                    )
 
+                    if firing_fleet.ships <= 0:
+                        firing_fleet.owner = None # Attacker's fleet destroyed
+                        message_parts.append(f"Attacking fleet {firing_fleet.name} (ID: {firing_fleet.id}) was destroyed by ambush!")
+                        # No VP for ambusher for destroying attacker in this phase, standard VP rules apply if attacker was Berserker.
+                        # Berserker VP for destroying ships is handled below in normal combat resolution.
+                        # If attacker is destroyed, they cannot continue their attack.
+                        target_fleet.is_ambushing = False # Ambush is spent
+                        return True, " ".join(message_parts)
+                
+                target_fleet.is_ambushing = False # Ambush is spent even if no shots fired (e.g. 0 ships)
+
+            # If attacker survived the ambush (or no ambush occurred), proceed with the original attack.
+            # Recalculate num_shots for the attacker, as they might have lost ships.
+            num_effective_ships_after_ambush = firing_fleet.ships # Re-evaluate effective ships
+            if firing_fleet.owner.character_type == "Merchant": # Apply merchant penalty again if applicable
+                ships_carrying_extra_load_after_ambush = 0
+                if firing_fleet.cargo > firing_fleet.ships:
+                    ships_carrying_extra_load_after_ambush = firing_fleet.cargo - firing_fleet.ships
+                num_effective_ships_after_ambush = firing_fleet.ships - ships_carrying_extra_load_after_ambush
+            
+            num_shots = num_effective_ships_after_ambush # This is the number of shots the original attacker now gets
+            if num_shots <= 0: # Attacker might have lost all ships or all firing capability
+                message_parts.append(f"Attacking fleet {firing_fleet.name} has no ships capable of firing after ambush/recalculation.")
+                return True, " ".join(message_parts) # Attacker cannot fire
+
+            # Original attack continues...
             hits_per_ship = 1 if target_fleet.cargo > 0 else 2
             ships_destroyed_potential = num_shots // hits_per_ship
             actual_ships_lost = min(ships_destroyed_potential, target_fleet.ships)
@@ -1633,6 +1690,240 @@ class Game:
         else:
             return False, f"Build Order Error: Unknown build_type '{order.build_type}'."
 
+    def execute_attach_artifact_order(self, order: 'AttachArtifactOrder', current_player: Player) -> tuple[bool, str]:
+        """Executes an AttachArtifactOrder for the given player."""
+        if not isinstance(order, AttachArtifactOrder): # AttachArtifactOrder needs to be imported or defined
+            return False, "Invalid order type for execute_attach_artifact_order."
+
+        fleet = self.get_fleet(order.fleet_id)
+        artifact_to_attach = self.get_artifact_by_id(order.artifact_id) # Need a helper for this
+
+        if not fleet:
+            return False, f"Attach Artifact Error: Fleet with ID {order.fleet_id} not found."
+        if not artifact_to_attach:
+            return False, f"Attach Artifact Error: Artifact with ID {order.artifact_id} not found in game."
+        if fleet.owner != current_player:
+            return False, f"Attach Artifact Error: Fleet {fleet.name} is not owned by player {current_player.name}."
+
+        # Locate the artifact: either on a world or another fleet owned by the player
+        source_world = None
+        source_fleet = None
+
+        if order.world_id is not None: # Artifact is specified to be on a world
+            source_world = self.get_world(order.world_id)
+            if not source_world:
+                return False, f"Attach Artifact Error: Source world with ID {order.world_id} not found."
+            if artifact_to_attach not in source_world.artifacts:
+                return False, f"Attach Artifact Error: Artifact {artifact_to_attach.name} not found at world {source_world.name}."
+            if source_world.owner != current_player and source_world.owner is not None: # Can take from unowned world or own world
+                return False, f"Attach Artifact Error: Player {current_player.name} does not own source world {source_world.name}."
+            if fleet.location != source_world:
+                return False, f"Attach Artifact Error: Fleet {fleet.name} is not at source world {source_world.name}."
+        else: # Artifact must be on another fleet of the player at the same location
+            found_on_other_fleet = False
+            for other_fleet in current_player.fleets:
+                if other_fleet.id == fleet.id: continue # Don't check the target fleet itself
+                if artifact_to_attach in other_fleet.artifacts:
+                    if other_fleet.location == fleet.location:
+                        source_fleet = other_fleet
+                        found_on_other_fleet = True
+                        break
+                    else:
+                        return False, f"Attach Artifact Error: Artifact {artifact_to_attach.name} is on fleet {other_fleet.name}, but it's not at the same location as target fleet {fleet.name}."
+            if not found_on_other_fleet:
+                return False, f"Attach Artifact Error: Artifact {artifact_to_attach.name} not found on any of player {current_player.name}'s other fleets at {fleet.location.name if fleet.location else 'unknown location'} or no source world_id was provided."
+
+        # TODO: Add rule for fleet artifact capacity if any. Assuming fleets can carry infinite artifacts for now.
+        # Example: if len(fleet.artifacts) >= MAX_FLEET_ARTIFACTS: return False, "Fleet artifact capacity reached."
+
+        # Move artifact
+        if source_world:
+            source_world.artifacts.remove(artifact_to_attach)
+            fleet.artifacts.append(artifact_to_attach)
+            return True, f"Artifact {artifact_to_attach.name} attached to fleet {fleet.name} from world {source_world.name}."
+        elif source_fleet:
+            source_fleet.artifacts.remove(artifact_to_attach)
+            fleet.artifacts.append(artifact_to_attach)
+            return True, f"Artifact {artifact_to_attach.name} transferred to fleet {fleet.name} from fleet {source_fleet.name}."
+        
+        return False, "Attach Artifact Error: Unknown error or artifact source not properly identified." # Should not be reached
+
+    def execute_drop_artifact_order(self, order: 'DropArtifactOrder', current_player: Player) -> tuple[bool, str]:
+        """Executes a DropArtifactOrder for the given player."""
+        if not isinstance(order, DropArtifactOrder): # DropArtifactOrder needs to be imported or defined
+            return False, "Invalid order type for execute_drop_artifact_order."
+
+        fleet = self.get_fleet(order.fleet_id)
+        artifact_to_drop = self.get_artifact_by_id(order.artifact_id) # Helper needed
+        target_world = self.get_world(order.world_id)
+
+        if not fleet:
+            return False, f"Drop Artifact Error: Fleet with ID {order.fleet_id} not found."
+        if not artifact_to_drop:
+            return False, f"Drop Artifact Error: Artifact with ID {order.artifact_id} not found in game."
+        if not target_world:
+            return False, f"Drop Artifact Error: Target world with ID {order.world_id} not found."
+        if fleet.owner != current_player:
+            return False, f"Drop Artifact Error: Fleet {fleet.name} is not owned by player {current_player.name}."
+        if artifact_to_drop not in fleet.artifacts:
+            return False, f"Drop Artifact Error: Artifact {artifact_to_drop.name} not found on fleet {fleet.name}."
+        if fleet.location != target_world:
+            return False, f"Drop Artifact Error: Fleet {fleet.name} is not at target world {target_world.name}."
+        if target_world.is_black_hole:
+            return False, f"Drop Artifact Error: Cannot drop artifacts into a Black Hole ({target_world.name})."
+
+        # Move artifact
+        fleet.artifacts.remove(artifact_to_drop)
+        target_world.artifacts.append(artifact_to_drop)
+        return True, f"Artifact {artifact_to_drop.name} dropped from fleet {fleet.name} to world {target_world.name}."
+
+    def get_artifact_by_id(self, artifact_id: str) -> Artifact | None:
+        """Helper to get an artifact instance by its ID from ALL_ARTIFACTS."""
+        return next((art for art in ALL_ARTIFACTS if art.id == artifact_id), None)
+
+    def execute_ambush_order(self, order: AmbushOrder, current_player: Player) -> tuple[bool, str]:
+        """Executes an AmbushOrder for the given player."""
+        if not isinstance(order, AmbushOrder):
+            return False, "Invalid order type for execute_ambush_order."
+
+        fleet = self.get_fleet(order.fleet_id)
+        world = self.get_world(order.world_id)
+
+        if not fleet:
+            return False, f"Ambush Order Error: Fleet with ID {order.fleet_id} not found."
+        if not world:
+            return False, f"Ambush Order Error: World with ID {order.world_id} not found."
+        if fleet.owner != current_player:
+            return False, f"Ambush Order Error: Fleet {fleet.name} (ID: {order.fleet_id}) is not owned by player {current_player.name}."
+        if fleet.location != world:
+            return False, f"Ambush Order Error: Fleet {fleet.name} (ID: {order.fleet_id}) is not at world {world.name} (ID: {order.world_id})."
+        if fleet.ships <= 0:
+            return False, f"Ambush Order Error: Fleet {fleet.name} (ID: {order.fleet_id}) has no ships and cannot ambush."
+        if fleet.is_at_peace:
+            return False, f"Ambush Order Error: Fleet {fleet.name} (ID: {order.fleet_id}) is at peace and cannot ambush."
+
+
+        fleet.is_ambushing = True
+        # Note: is_at_peace should likely be set to False if an ambush is set.
+        # However, the current rules for is_at_peace are more about preventing firing.
+        # Setting an ambush implies readiness for combat.
+        # For now, we are not changing is_at_peace here, but it's a point for future rule refinement.
+        # fleet.is_at_peace = False 
+
+        return True, f"Fleet {fleet.name} (ID: {order.fleet_id}) is now set to ambush at {world.name} (ID: {order.world_id})."
+
+    def get_player_by_user_id(self, user_id: str) -> Player | None:
+        """Helper to get a player object by their user_id."""
+        return next((p for p in self.players if p.user_id == user_id), None)
+
+    def execute_set_ally_order(self, order: SetAllyOrder, current_player: Player) -> tuple[bool, str]:
+        """Executes a SetAllyOrder for the given player."""
+        if not isinstance(order, SetAllyOrder):
+            return False, "Invalid order type for execute_set_ally_order."
+
+        target_player = self.get_player_by_user_id(order.target_player_id)
+        if not target_player:
+            return False, f"Set Ally Error: Target player with ID '{order.target_player_id}' not found."
+        if current_player.user_id == order.target_player_id:
+            return False, f"Set Ally Error: Player {current_player.name} cannot ally with themselves."
+
+        if order.target_player_id not in current_player.allies:
+            current_player.allies.append(order.target_player_id)
+            # Notify both players
+            self.add_turn_event(current_player.user_id, f"You have declared an alliance with {target_player.name}.")
+            self.add_turn_event(target_player.user_id, f"{current_player.name} has declared an alliance with you.")
+            return True, f"Player {current_player.name} has set an alliance with {target_player.name}."
+        else:
+            return False, f"Player {current_player.name} is already allied with {target_player.name}."
+
+    def execute_gift_world_order(self, order: GiftWorldOrder, current_player: Player) -> tuple[bool, str]:
+        """Executes a GiftWorldOrder for the given player."""
+        if not isinstance(order, GiftWorldOrder):
+            return False, "Invalid order type for execute_gift_world_order."
+
+        world_to_gift = self.get_world(order.world_id)
+        recipient_player = self.get_player_by_user_id(order.recipient_player_id)
+
+        if not world_to_gift:
+            return False, f"Gift World Error: World with ID {order.world_id} not found."
+        if not recipient_player:
+            return False, f"Gift World Error: Recipient player with ID '{order.recipient_player_id}' not found."
+        if world_to_gift.owner != current_player:
+            return False, f"Gift World Error: Player {current_player.name} does not own world {world_to_gift.name} (ID: {order.world_id})."
+        if current_player.user_id == order.recipient_player_id:
+            return False, f"Gift World Error: Player {current_player.name} cannot gift a world to themselves."
+        if world_to_gift.is_black_hole:
+            return False, f"Gift World Error: Cannot gift a black hole ({world_to_gift.name})."
+
+        # Transfer ownership
+        world_to_gift.owner = recipient_player
+        world_to_gift.turns_owned = 1 # Reset for new owner
+
+        # Handle converts on the gifted world
+        if world_to_gift.convert_units > 0:
+            if recipient_player.character_type == "Apostle" and world_to_gift.converts_owner_id == recipient_player.user_id:
+                # Converts already belong to the recipient Apostle, no change needed.
+                pass
+            elif recipient_player.character_type == "Apostle":
+                # New owner is an Apostle, converts now belong to them.
+                world_to_gift.converts_owner_id = recipient_player.user_id
+                self.add_turn_event(recipient_player.user_id, f"Convert units at {world_to_gift.name} are now yours.")
+            else:
+                # New owner is not an Apostle, or converts belonged to a different Apostle. Converts are disbanded.
+                disbanded_converts = world_to_gift.convert_units
+                world_to_gift.convert_units = 0
+                world_to_gift.converts_owner_id = None
+                self.add_turn_event(current_player.user_id, f"{disbanded_converts} convert units at {world_to_gift.name} were disbanded upon transfer to {recipient_player.name}.")
+                if current_player.user_id != recipient_player.user_id: # Avoid double message if somehow gifted to self
+                    self.add_turn_event(recipient_player.user_id, f"{disbanded_converts} convert units at {world_to_gift.name} (gifted by {current_player.name}) were disbanded as you are not their Apostle master.")
+
+
+        # Add to recipient's list of worlds if not already there (shouldn't be)
+        if world_to_gift not in recipient_player.worlds:
+            recipient_player.worlds.append(world_to_gift)
+        # Remove from giver's list of worlds
+        if world_to_gift in current_player.worlds:
+            current_player.worlds.remove(world_to_gift)
+        
+        # Notify players
+        self.add_turn_event(current_player.user_id, f"You have gifted world {world_to_gift.name} (ID: {order.world_id}) to {recipient_player.name}.")
+        self.add_turn_event(recipient_player.user_id, f"{current_player.name} has gifted you world {world_to_gift.name} (ID: {order.world_id}).")
+
+        return True, f"World {world_to_gift.name} (ID: {order.world_id}) gifted from {current_player.name} to {recipient_player.name}."
+
+    def execute_gift_fleet_order(self, order: GiftFleetOrder, current_player: Player) -> tuple[bool, str]:
+        """Executes a GiftFleetOrder for the given player."""
+        if not isinstance(order, GiftFleetOrder):
+            return False, "Invalid order type for execute_gift_fleet_order."
+
+        fleet_to_gift = self.get_fleet(order.fleet_id)
+        recipient_player = self.get_player_by_user_id(order.recipient_player_id)
+
+        if not fleet_to_gift:
+            return False, f"Gift Fleet Error: Fleet with ID {order.fleet_id} not found."
+        if not recipient_player:
+            return False, f"Gift Fleet Error: Recipient player with ID '{order.recipient_player_id}' not found."
+        if fleet_to_gift.owner != current_player:
+            return False, f"Gift Fleet Error: Player {current_player.name} does not own fleet {fleet_to_gift.name} (ID: {order.fleet_id})."
+        if current_player.user_id == order.recipient_player_id:
+            return False, f"Gift Fleet Error: Player {current_player.name} cannot gift a fleet to themselves."
+
+        # Transfer ownership
+        fleet_to_gift.owner = recipient_player
+        # Fleet properties like location, ships, cargo, artifacts, is_ambushing, is_at_peace remain.
+
+        # Add to recipient's list of fleets
+        if fleet_to_gift not in recipient_player.fleets:
+            recipient_player.fleets.append(fleet_to_gift)
+        # Remove from giver's list of fleets
+        if fleet_to_gift in current_player.fleets:
+            current_player.fleets.remove(fleet_to_gift)
+
+        # Notify players
+        self.add_turn_event(current_player.user_id, f"You have gifted fleet {fleet_to_gift.name} (ID: {order.fleet_id}) to {recipient_player.name}.")
+        self.add_turn_event(recipient_player.user_id, f"{current_player.name} has gifted you fleet {fleet_to_gift.name} (ID: {order.fleet_id}).")
+
+        return True, f"Fleet {fleet_to_gift.name} (ID: {order.fleet_id}) gifted from {current_player.name} to {recipient_player.name}."
 
     def process_turn(self, user_id: str, raw_orders_list: list[dict]) -> list[str]:
         """Processes a list of raw order dictionaries for a turn, for a given user."""
@@ -1674,6 +1965,18 @@ class Game:
                 success, message = self.execute_unload_cargo_order(order_obj)
             elif isinstance(order_obj, BuildOrder):
                 success, message = self.execute_build_order(order_obj, current_player_object)
+            elif isinstance(order_obj, AttachArtifactOrder): # AttachArtifactOrder needs to be imported or defined
+                success, message = self.execute_attach_artifact_order(order_obj, current_player_object)
+            elif isinstance(order_obj, DropArtifactOrder): # DropArtifactOrder needs to be imported or defined
+                success, message = self.execute_drop_artifact_order(order_obj, current_player_object)
+            elif isinstance(order_obj, AmbushOrder): # AmbushOrder needs to be imported
+                success, message = self.execute_ambush_order(order_obj, current_player_object)
+            elif isinstance(order_obj, SetAllyOrder):
+                success, message = self.execute_set_ally_order(order_obj, current_player_object)
+            elif isinstance(order_obj, GiftWorldOrder):
+                success, message = self.execute_gift_world_order(order_obj, current_player_object)
+            elif isinstance(order_obj, GiftFleetOrder):
+                success, message = self.execute_gift_fleet_order(order_obj, current_player_object)
             else:
                 # This path should ideally not be reached if order_from_dict is comprehensive
                 message = f"Order type {type(order_obj).__name__} not recognized by process_turn."
@@ -1703,9 +2006,16 @@ class Game:
                         # This message is for server log for now, could be an event for player.
                         print(production_msg) 
                         # self.add_turn_event(world.owner.user_id, production_msg) # If players should be notified
+        
+        # --- Reset Ambush Statuses (End of Order Processing, before Growth/Capture) ---
+        # This is a general cleanup. Specific ambushes are also reset after they are triggered in combat.
+        for fleet_obj in self.fleets:
+            if fleet_obj.is_ambushing:
+                # Consider if a message is needed for ambushes that were set but not triggered.
+                # For now, simply reset.
+                fleet_obj.is_ambushing = False
+                # print(f"DEBUG: Resetting ambush status for fleet {fleet_obj.id} at end of order processing.")
 
-        # --- Metal Production Phase --- (Already done)
-        # ...
 
         # --- Population Growth Phase ---
         print(f"Turn {self.turn_number}: Starting Population Growth Phase for player {current_player_object.name}...")
@@ -1923,10 +2233,29 @@ class Game:
 def order_from_dict(order_dict: dict) -> Order | None:
     """Creates an Order subclass instance from a dictionary."""
     order_type = order_dict.get('order_type')
+    player_id = order_dict.get('player_id') # Assuming player_id might be part of the dict for some orders.
+                                          # The new classes expect it.
     
-    # Prepare data by removing 'order_type' for **kwargs to pass to constructors
-    # This assumes constructor parameters match dictionary keys.
-    data = {k: v for k, v in order_dict.items() if k != 'order_type'}
+    # Prepare data by removing 'order_type' and 'player_id' for **kwargs if they are not needed by all constructors
+    # or if constructors handle them explicitly.
+    # For now, let's assume player_id is handled by the Order base class if it's added there,
+    # or specific orders if needed. The current Order base in app.py doesn't take player_id.
+    # The new Order classes in orders.py *do* take player_id.
+    # We need to decide which definition of Order we are using or reconcile them.
+    # For now, I will assume that player_id is NOT part of the order_dict for orders other than
+    # Attach/Drop, and for Attach/Drop, their specific constructors in orders.py will handle it.
+    # This might lead to issues if the base Order class in app.py is different from orders.py.
+
+    # Let's refine data preparation:
+    data = {k: v for k, v in order_dict.items() if k not in ['order_type', 'player_id']}
+
+
+    # The Order base class in orders.py requires player_id.
+    # We need to ensure player_id is available, perhaps from current_user context if not in order_dict itself.
+    # For now, I'll assume the order_dict itself *will* contain player_id for the new types,
+    # and other types get it implicitly or don't need it for their app.py constructors.
+    # This is a potential point of inconsistency.
+    # Let's assume player_id IS in the dict for the new types.
 
     try:
         if order_type == "BUILD":
@@ -1971,6 +2300,68 @@ def order_from_dict(order_dict: dict) -> Order | None:
             return LoadCargoOrder(**data)
         elif order_type == "UNLOAD_CARGO":
             return UnloadCargoOrder(**data)
+        elif order_type == "ATTACH_ARTIFACT":
+            # Ensure fleet_id, artifact_id are present. world_id is optional.
+            if not all(k in data for k in ['fleet_id', 'artifact_id']) or player_id is None:
+                print(f"Error: Missing fleet_id, artifact_id, or player_id for ATTACH_ARTIFACT order: {data}, player_id: {player_id}")
+                return None
+            
+            # Add player_id to data for the constructor
+            constructor_data = data.copy()
+            constructor_data['player_id'] = int(player_id)
+            constructor_data['fleet_id'] = int(constructor_data['fleet_id'])
+            # artifact_id is already a string like "V1", "V90"
+            if 'world_id' in constructor_data and constructor_data['world_id'] is not None:
+                constructor_data['world_id'] = int(constructor_data['world_id'])
+            else: # Ensure world_id is None if not provided or explicitly null
+                constructor_data['world_id'] = None
+            return AttachArtifactOrder(**constructor_data)
+        elif order_type == "DROP_ARTIFACT":
+            if not all(k in data for k in ['fleet_id', 'artifact_id', 'world_id']) or player_id is None:
+                print(f"Error: Missing fleet_id, artifact_id, world_id, or player_id for DROP_ARTIFACT order: {data}, player_id: {player_id}")
+                return None
+            
+            constructor_data = data.copy()
+            constructor_data['player_id'] = int(player_id)
+            constructor_data['fleet_id'] = int(constructor_data['fleet_id'])
+            constructor_data['world_id'] = int(constructor_data['world_id'])
+            # artifact_id is string
+            return DropArtifactOrder(**constructor_data)
+        elif order_type == "AMBUSH":
+            if not all(k in data for k in ['fleet_id', 'world_id']) or player_id is None:
+                print(f"Error: Missing fleet_id, world_id, or player_id for AMBUSH order: {data}, player_id: {player_id}")
+                return None
+            constructor_data = data.copy()
+            constructor_data['player_id'] = int(player_id)
+            constructor_data['fleet_id'] = int(constructor_data['fleet_id'])
+            constructor_data['world_id'] = int(constructor_data['world_id'])
+            return AmbushOrder(**constructor_data)
+        elif order_type == "SET_ALLY":
+            if 'target_player_id' not in data or not data['target_player_id'] or player_id is None:
+                print(f"Error: Missing target_player_id or player_id for SET_ALLY order: {data}, player_id: {player_id}")
+                return None
+            constructor_data = data.copy()
+            constructor_data['player_id'] = int(player_id)
+            # target_player_id is already a string (user_id)
+            return SetAllyOrder(**constructor_data)
+        elif order_type == "GIFT_WORLD":
+            if not all(k in data for k in ['world_id', 'recipient_player_id']) or not data['recipient_player_id'] or player_id is None:
+                print(f"Error: Missing world_id, recipient_player_id, or player_id for GIFT_WORLD order: {data}, player_id: {player_id}")
+                return None
+            constructor_data = data.copy()
+            constructor_data['player_id'] = int(player_id)
+            constructor_data['world_id'] = int(constructor_data['world_id'])
+            # recipient_player_id is already a string (user_id)
+            return GiftWorldOrder(**constructor_data)
+        elif order_type == "GIFT_FLEET":
+            if not all(k in data for k in ['fleet_id', 'recipient_player_id']) or not data['recipient_player_id'] or player_id is None:
+                print(f"Error: Missing fleet_id, recipient_player_id, or player_id for GIFT_FLEET order: {data}, player_id: {player_id}")
+                return None
+            constructor_data = data.copy()
+            constructor_data['player_id'] = int(player_id)
+            constructor_data['fleet_id'] = int(constructor_data['fleet_id'])
+            # recipient_player_id is already a string (user_id)
+            return GiftFleetOrder(**constructor_data)
         else:
             print(f"Warning: Unknown order type '{order_type}' in order_from_dict.")
             return None
