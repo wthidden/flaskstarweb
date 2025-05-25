@@ -1797,9 +1797,11 @@ class Game:
 
         return results_messages
     
-    def resolve_world_and_key_capture(self):
+    def resolve_world_and_key_capture(self) -> list[str]: # Added return type hint
         """Resolves world ownership and capture of unowned fleets (keys) based on presence.
-           Also handles end-of-turn mine increases."""
+           Also handles end-of-turn mine increases.
+           Returns a list of messages/events that occurred during this phase."""
+        results_messages: list[str] = []
         print(f"Turn {self.turn_number}: Resolving world/key capture and mine increases...")
 
         # World Capture
@@ -1839,8 +1841,14 @@ class Game:
                         capture_msg = f"World {world.name} (ID: {world.id}) captured by {new_potential_owner.name} from {world.owner.name if world.owner else 'Unowned'}."
                         print(capture_msg)
                         if world.owner: # Notify old owner if existed
-                            self.add_turn_event(world.owner.user_id, f"You lost control of world {world.name} (ID: {world.id}) to {new_potential_owner.name}.")
-                        self.add_turn_event(new_potential_owner.user_id, f"You captured world {world.name} (ID: {world.id}) from {world.owner.name if world.owner else 'Unowned'}.")
+                            old_owner_msg = f"You lost control of world {world.name} (ID: {world.id}) to {new_potential_owner.name}."
+                            self.add_turn_event(world.owner.user_id, old_owner_msg)
+                            results_messages.append(f"Event for {world.owner.user_id}: {old_owner_msg}")
+                        
+                        new_owner_msg = f"You captured world {world.name} (ID: {world.id}) from {world.owner.name if world.owner else 'Unowned'}."
+                        self.add_turn_event(new_potential_owner.user_id, new_owner_msg)
+                        results_messages.append(f"Event for {new_potential_owner.user_id}: {new_owner_msg}")
+                        results_messages.append(capture_msg) # General server log message also added to results
                         
                         world.owner = new_potential_owner
                         world.turns_owned = 1 # Reset turns owned for new owner
@@ -1849,11 +1857,16 @@ class Game:
                             if world.convert_units > 0:
                                 world.convert_units = 0
                                 world.converts_owner_id = None
-                                self.add_turn_event(new_potential_owner.user_id, f"Any convert units at {world.name} were disbanded upon capture.")
+                                disband_msg = f"Any convert units at {world.name} were disbanded upon capture."
+                                self.add_turn_event(new_potential_owner.user_id, disband_msg)
+                                results_messages.append(f"Event for {new_potential_owner.user_id}: {disband_msg}")
                 else:
                     # Log attempt to capture from ally
-                    print(f"Player {new_potential_owner.name} fleet at {world.name} but world is owned by ally {world.owner.name}. No capture.")
+                    no_capture_ally_msg = f"Player {new_potential_owner.name} fleet at {world.name} but world is owned by ally {world.owner.name}. No capture."
+                    print(no_capture_ally_msg)
                     self.add_turn_event(new_potential_owner.user_id, f"Your fleet at {world.name} did not capture it as it's owned by your ally {world.owner.name}.")
+                    # Optionally add to player-facing results if desired, though it's more of a non-event for the player
+                    # results_messages.append(f"Event for {new_potential_owner.user_id}: Your fleet at {world.name} did not capture it as it's owned by your ally {world.owner.name}.")
 
 
             # Else (multiple owners present, or no owners with fleets and world was already unowned): ownership doesn't change from this phase.
@@ -1882,7 +1895,10 @@ class Game:
                     key_fleet.owner = new_owner_of_key
                     key_capture_msg = f"Unowned fleet key {key_fleet.name} (ID: {key_fleet.id}) at {world_of_key.name} now owned by {new_owner_of_key.name}."
                     print(key_capture_msg)
-                    self.add_turn_event(new_owner_of_key.user_id, f"You acquired unowned fleet key {key_fleet.name} (ID: {key_fleet.id}) at {world_of_key.name}.")
+                    key_acquired_event_msg = f"You acquired unowned fleet key {key_fleet.name} (ID: {key_fleet.id}) at {world_of_key.name}."
+                    self.add_turn_event(new_owner_of_key.user_id, key_acquired_event_msg)
+                    results_messages.append(f"Event for {new_owner_of_key.user_id}: {key_acquired_event_msg}")
+                    results_messages.append(key_capture_msg) # General server log message also added to results
                     # Artifacts on the key_fleet are now implicitly owned by new_owner_of_key.
         
         # --- Turns Owned & Mine Increase Phase (Moved to very end) ---
@@ -1897,6 +1913,7 @@ class Game:
                         print(mine_increase_msg)
                         if world.owner: # Should always be true here
                              self.add_turn_event(world.owner.user_id, mine_increase_msg)
+                             results_messages.append(f"Event for {world.owner.user_id}: {mine_increase_msg}")
 
 
         return results_messages

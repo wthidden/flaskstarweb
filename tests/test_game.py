@@ -1831,6 +1831,99 @@ class TestGameCommands(unittest.TestCase):
         player.fleets.append(fleet)
         return fleet
 
+    def test_submit_turn_triggers_capture_and_mine_increase(self):
+        # 1. Setup
+        # Using existing players from setUp: self.player1_obj (P1, Merchant), self.player2_obj (P2, EmpireBuilder)
+        # Let P1 be player_a, P2 be player_b for clarity in this test.
+        player_a = self.player1_obj # Merchant
+        player_b = self.player2_obj # Empire Builder
+
+        # Create World X: Initially unowned.
+        world_x = World(id=50, name="WorldX", owner=None, connections=[], iships=0,pships=0,population=10,max_population=100,industry=10,mines=1,stockpile=10)
+        self.game.worlds.append(world_x)
+
+        # Create World Z: A distinct world.
+        world_z = World(id=51, name="WorldZ", owner=None, connections=[], iships=0,pships=0,population=10,max_population=100,industry=10,mines=1,stockpile=10)
+        self.game.worlds.append(world_z)
+        
+        # Create Key Y: Unowned fleet, 0 ships, at world_z.
+        key_y_fleet = Fleet(id=52, name="KeyY", ships=0, location=world_z, owner=None)
+        self.game.fleets.append(key_y_fleet)
+
+        # Create Fleet B1: Owned by player_b, ships > 0, not at peace, at world_x.
+        # self.fleet4_p2_at_a is P2's fleet. Let's repurpose it.
+        fleet_b1 = self.fleet4_p2_at_a 
+        fleet_b1.owner = player_b
+        fleet_b1.location = world_x
+        fleet_b1.ships = 10
+        fleet_b1.is_at_peace = False
+        if fleet_b1 not in player_b.fleets: player_b.fleets.append(fleet_b1)
+
+
+        # Create Fleet A1: Owned by player_a, ships > 0, not at peace, at world_z.
+        # self.fleet1 is P1's fleet.
+        fleet_a1 = self.fleet1
+        fleet_a1.owner = player_a
+        fleet_a1.location = world_z
+        fleet_a1.ships = 10
+        fleet_a1.is_at_peace = False
+        if fleet_a1 not in player_a.fleets: player_a.fleets.append(fleet_a1)
+
+
+        # Create World M: Owned by player_a, mines = 5, turns_owned = 7.
+        # self.world_c is owned by P1 (player_a).
+        world_m = self.world_c 
+        world_m.owner = player_a
+        world_m.mines = 5
+        world_m.turns_owned = 7
+        # Ensure no other fleets at World M
+        for f in self.game.fleets:
+            if f.location == world_m and f != fleet_a1: # fleet_a1 is at world_z now
+                f.location = self.world_isolated # Move away
+
+        # 2. Action
+        # Simulate processing a turn for Player B.
+        print(f"Initial state: World X owner: {world_x.owner}, Key Y owner: {key_y_fleet.owner}, World M mines: {world_m.mines}, World M turns_owned: {world_m.turns_owned}")
+        
+        # Clear previous turn events for player_b before processing their turn
+        if player_b.user_id in self.game.turn_events: self.game.turn_events[player_b.user_id] = []
+        self.game.process_turn(player_b.user_id, [])
+        
+        # Simulate processing a turn for Player A.
+        # Clear previous turn events for player_a before processing their turn
+        if player_a.user_id in self.game.turn_events: self.game.turn_events[player_a.user_id] = []
+        self.game.process_turn(player_a.user_id, [])
+
+        print(f"Post-turn state: World X owner: {world_x.owner.name if world_x.owner else 'None'}, Key Y owner: {key_y_fleet.owner.name if key_y_fleet.owner else 'None'}, World M mines: {world_m.mines}, World M turns_owned: {world_m.turns_owned}")
+        print(f"Events for P_A ({player_a.user_id}): {self.game.turn_events.get(player_a.user_id)}")
+        print(f"Events for P_B ({player_b.user_id}): {self.game.turn_events.get(player_b.user_id)}")
+
+
+        # 3. Assertions
+        self.assertEqual(world_x.owner, player_b, "Player B should capture World X.")
+        self.assertEqual(world_x.turns_owned, 1, "World X turns_owned should be 1 after capture.")
+        
+        self.assertEqual(key_y_fleet.owner, player_a, "Player A should capture Key Y.")
+        
+        self.assertEqual(world_m.mines, 6, "World M mines should increase to 6.")
+        self.assertEqual(world_m.turns_owned, 1, "World M turns_owned should reset to 1 after mine increase.")
+
+        # Check game.turn_events for relevant messages
+        # Note: process_turn clears events for the *current_user* whose turn is being processed *before* adding new ones for that turn.
+        # So, we check the events that were generated during that specific process_turn call.
+        # The turn_events dictionary in the game object will hold the *last* set of events generated for each player.
+
+        player_b_events = self.game.get_and_clear_turn_events(player_b.user_id) # Clears after getting
+        found_world_x_capture_event = any(f"You captured world {world_x.name}" in event for event in player_b_events)
+        self.assertTrue(found_world_x_capture_event, "Player B events should contain World X capture message.")
+
+        player_a_events = self.game.get_and_clear_turn_events(player_a.user_id) # Clears after getting
+        found_key_y_capture_event = any(f"You acquired unowned fleet key {key_y_fleet.name}" in event for event in player_a_events)
+        found_mine_increase_event = any(f"World {world_m.name} (ID: {world_m.id}, Owner: {player_a.name}) increased mines to 6" in event for event in player_a_events) # Exact message from app.py
+        
+        self.assertTrue(found_key_y_capture_event, "Player A events should contain Key Y capture message.")
+        self.assertTrue(found_mine_increase_event, "Player A events should contain World M mine increase message.")
+
 
 if __name__ == '__main__':
     # This allows running the tests directly from this file
