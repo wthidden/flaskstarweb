@@ -565,12 +565,45 @@
     </div> <!-- end .container -->
 
     <script>
+        // Data passed from Flask
+        const playerOwnedWorlds = {{ player_owned_worlds|tojson|safe if player_owned_worlds else [] }};
+        const playerOwnedFleets = {{ player_owned_fleets|tojson|safe if player_owned_fleets else [] }};
+        // All artifacts are already passed to the template, can be accessed if needed for specific dropdowns
+        const allArtifacts = {{ all_artifacts|tojson|safe if all_artifacts else [] }};
+
+
         document.addEventListener('DOMContentLoaded', function () {
             const orderTypeSelect = document.getElementById('orderType');
             const addOrderBtn = document.getElementById('addOrderBtn');
             const queuedOrdersListDiv = document.getElementById('queuedOrdersList');
+            // const buildTypeSelect = document.getElementById('buildTypeSelect'); // Will be used later
+            // const buildTargetEntityIdSelect = document.getElementById('buildTargetEntityId'); // Will be used later
+            // const buildTargetEntityIdNumericInput = document.getElementById('buildTargetEntityIdNumeric'); // Will be used later
+            // const transferFromEntityTypeSelect = document.getElementById('transferFromEntityType'); // Will be used later
+            // const transferFromIdSelect = document.getElementById('transferFromId'); // Will be used later
+            // const transferToEntityTypeSelect = document.getElementById('transferToEntityType'); // Will be used later
+            // const transferToIdSelect = document.getElementById('transferToId'); // Will be used later
             const turnForm = document.getElementById('turnForm');
             const ordersJsonInput = document.getElementById('ordersJsonInput');
+
+            // Helper function to populate select dropdowns
+            function populateSelect(selectElement, items, valueField, textFieldPrefix, idField) {
+                selectElement.innerHTML = '<option value="">Select...</option>'; // Clear existing options and add a default
+                items.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item[idField]; 
+                    let textContent = `${textFieldPrefix} ${item.name} (ID: ${item[idField]})`;
+                    if (item.ships !== undefined) { // For fleets, add ship count
+                        textContent += ` - Ships: ${item.ships}`;
+                    }
+                    if (item.location && item.location.id && item.location.name) { // For fleets, add location
+                         textContent += ` - Loc: W${item.location.id} (${item.location.name})`;
+                    }
+                    option.textContent = textContent;
+                    selectElement.appendChild(option);
+                });
+            }
+
 
             const inputGroups = {
                 'MOVE': document.getElementById('moveInputs'),
