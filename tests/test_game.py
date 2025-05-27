@@ -5,10 +5,18 @@ import os
 # Adjust the path to import from the parent directory (project root)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app import Game, World, Fleet, Player, User, Artifact, app, users_db, get_or_create_game # Added app, users_db, get_or_create_game
-from app import MoveOrder, TransferOrder, LoadCargoOrder, UnloadCargoOrder, order_from_dict
-from app import AttachArtifactOrder, DropArtifactOrder, AmbushOrder, SetAllyOrder, GiftWorldOrder, GiftFleetOrder # Import new order classes
-from app import create_game, assign_homeworld_to_player, assign_starting_fleets_to_player, ALL_ARTIFACTS # Added game setup functions and ALL_ARTIFACTS
+from starweb_app.game_engine import Game, order_from_dict, create_game, get_or_create_game
+from starweb_app.models import World, Fleet, Player, User, Artifact, ALL_ARTIFACTS
+from starweb_app.main import app, users_db, assign_homeworld_to_player, assign_starting_fleets_to_player # app, users_db and helpers moved to main
+from starweb_app.orders import (
+    MoveOrder, TransferOrder, LoadCargoOrder, UnloadCargoOrder, 
+    AttachArtifactOrder, DropArtifactOrder, AmbushOrder, SetAllyOrder, 
+    GiftWorldOrder, GiftFleetOrder, BuildOrder, FireOrder # Added BuildOrder, FireOrder
+)
+# EmpireBuilder etc. are imported via models.Player.create_character if needed, or directly if type hinting specific characters.
+# For now, direct imports of character classes are not strictly necessary in tests unless instantiating them directly.
+# Player class itself is imported from models.
+
 import random # For artifact distribution check
 from werkzeug.security import generate_password_hash
 
