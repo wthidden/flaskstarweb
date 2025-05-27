@@ -19,9 +19,7 @@ class World:
                  artifacts: list['Artifact'] | None = None, # Type hint for artifacts
                  turns_owned: int = 0, is_black_hole: bool = False,
                  robot_units: int = 0, convert_units: int = 0, converts_owner_id: str | None = None,
-                 cg_unloads_count: int = 0,
-                 times_plundered_this_game: int = 0, recovering_from_plunder_turns: int = 0,
-                 is_destroyed_by_pbb: bool = False): 
+                 cg_unloads_count: int = 0): 
         self.id = id
         self.name = name
         self.owner: Player | None = owner
@@ -40,9 +38,6 @@ class World:
         self.convert_units = convert_units
         self.converts_owner_id = converts_owner_id
         self.cg_unloads_count = cg_unloads_count
-        self.times_plundered_this_game = times_plundered_this_game
-        self.recovering_from_plunder_turns = recovering_from_plunder_turns
-        self.is_destroyed_by_pbb = is_destroyed_by_pbb
 
 
 class Fleet:
@@ -50,7 +45,7 @@ class Fleet:
 
     def __init__(self, id, name, ships: int, location: World | None, owner: 'Player | None', 
                  cargo: int, artifacts: list['Artifact'] | None = None, # Type hint for artifacts
-                 is_at_peace: bool = False, has_pbb: bool = False): 
+                 is_at_peace: bool = False): 
         self.id = id
         self.name = name
         self.ships = ships
@@ -60,7 +55,6 @@ class Fleet:
         self.artifacts: list[Artifact] = artifacts if artifacts is not None else []
         self.is_at_peace = is_at_peace
         self.is_ambushing = False # Added for Ambush orders
-        self.has_pbb = has_pbb
 
     def get_max_cargo_capacity(self) -> int:
         """Calculates max cargo based on ship count and owner type."""
@@ -404,7 +398,7 @@ class Berserker:
                     vp += 5
         
         # Artifact VPs for Berserker
-        # Preferred: "Titanium", "Sword". Greatest Treasure: "Titanium Sword"
+        # Preferred: "Titanium", "Sphinx". Greatest Treasure: "Titanium Sphinx"
         artifact_vp = 0
         owned_artifacts: list[Artifact] = []
         for world in self.player.worlds:
@@ -415,14 +409,14 @@ class Berserker:
                 owned_artifacts.extend(fleet.artifacts)
 
         for artifact in owned_artifacts:
-            if artifact.name == "Titanium Sword": # Greatest Treasure
+            if artifact.name == "Titanium Sphinx": # Greatest Treasure
                 artifact_vp += 15
                 continue
             if artifact.is_plastic:
                 artifact_vp -= 10
                 continue
             
-            if artifact.first_word == "Titanium" or artifact.second_word == "Sword": # Preferred
+            if artifact.first_word == "Titanium" or artifact.second_word == "Sphinx": # Preferred
                 artifact_vp += 5
                 continue
 
@@ -478,7 +472,7 @@ class Apostle:
         vp += total_apostle_converts // 10
 
         # Artifact VPs for Apostle
-        # Preferred: "Blessed", "Sepulchre". Greatest Treasure: "Blessed Sepulchre"
+        # Preferred: "Blessed", "Stardust". Greatest Treasure: "Blessed Stardust"
         artifact_vp = 0
         owned_artifacts: list[Artifact] = []
         for world in self.player.worlds:
@@ -489,14 +483,14 @@ class Apostle:
                 owned_artifacts.extend(fleet.artifacts)
 
         for artifact in owned_artifacts:
-            if artifact.name == "Blessed Sepulchre": # Greatest Treasure
+            if artifact.name == "Blessed Stardust": # Greatest Treasure
                 artifact_vp += 15
                 continue
             if artifact.is_plastic:
                 artifact_vp -= 10
                 continue
             
-            if artifact.first_word == "Blessed" or artifact.second_word == "Sepulchre": # Preferred
+            if artifact.first_word == "Blessed" or artifact.second_word == "Stardust": # Preferred
                 artifact_vp += 5
                 continue
 
@@ -517,8 +511,7 @@ class Apostle:
 class Player:
     def __init__(self, name: str, character_type: str, user_id: str, home_world: World | None = None, 
                  diplomacy: dict | None = None, worlds: list[World] | None = None, fleets: list[Fleet] | None = None,
-                 victory_points: int = 0, allies: list[str] | None = None,
-                 jihad_target_player_id: str | None = None): # Added for Apostle Jihad
+                 victory_points: int = 0, allies: list[str] | None = None):
         self.name = name # Often same as User.username
         self.character_type = character_type
         self.user_id = user_id # Link to Flask-Login User.id
@@ -530,7 +523,6 @@ class Player:
         self.fleets: list[Fleet] = fleets if fleets is not None else []
         self.victory_points = victory_points
         self.allies: list[str] = allies if allies is not None else []
-        self.jihad_target_player_id = jihad_target_player_id # Added for Apostle Jihad
         self.character = self.create_character()
 
     def create_character(self):

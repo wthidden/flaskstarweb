@@ -172,9 +172,6 @@ def display_game():
     if current_user.is_authenticated: # current_user from flask_login
         current_player_ingame = game_instance.get_player_by_user_id(current_user.id)
         player_turn_events = game_instance.get_and_clear_turn_events(current_user.id)
-    
-    player_owned_worlds = current_player_ingame.worlds if current_player_ingame else []
-    player_owned_fleets = current_player_ingame.fleets if current_player_ingame else []
 
     worlds_to_display = []
     fleets_to_display = []
@@ -196,8 +193,6 @@ def display_game():
                            current_player_ingame=current_player_ingame,
                            worlds_to_display=worlds_to_display,
                            fleets_to_display=fleets_to_display,
-                           player_owned_worlds=player_owned_worlds, # Added for dropdowns
-                           player_owned_fleets=player_owned_fleets, # Added for dropdowns
                            is_admin_view=is_admin_view,
                            player_turn_events=player_turn_events,
                            all_artifacts=ALL_ARTIFACTS) # Pass ALL_ARTIFACTS for UI selectors
