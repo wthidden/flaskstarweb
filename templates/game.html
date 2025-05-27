@@ -1,31 +1,861 @@
-<html lang="">
-<head><title>Game</title></head>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StarWeb Game</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+            color: #333;
+            font-size: 14px;
+        }
+        header {
+            background-color: #333;
+            color: #fff;
+            padding: 1em 0;
+            text-align: center;
+        }
+        nav {
+            background-color: #444;
+            color: #fff;
+            padding: 0.5em;
+            text-align: center;
+        }
+        nav a {
+            color: #fff;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+        nav a:hover {
+            text-decoration: underline;
+        }
+        .container {
+            width: 90%;
+            margin: auto;
+            overflow: hidden;
+            padding: 20px;
+        }
+        h1, h2, h3, h4 {
+            color: #333;
+        }
+        h1 { text-align: center; margin-bottom: 20px; }
+        h2 { margin-top: 30px; border-bottom: 1px solid #ccc; padding-bottom: 5px;}
+        h3 { margin-top: 20px; }
+
+        .player-summary {
+            background-color: #fff;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-left: 5px solid #5cb85c; /* Green accent for player */
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        }
+        .player-summary h3 { margin-top: 0; color: #5cb85c; }
+        .player-summary p, .player-summary ul { margin-bottom: 5px; font-size: 0.95em; }
+        .player-summary ul { padding-left: 20px; list-style: square;}
+
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+            font-size: 0.9em;
+        }
+        th {
+            background-color: #555; /* Darker header for tables */
+            color: #fff;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        td ul { margin: 0; padding-left: 15px; } /* For artifact lists */
+
+        .flashes {
+            list-style-type: none;
+            padding: 0;
+            margin-bottom: 15px;
+        }
+        .flashes li {
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .flashes .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb;}
+        .flashes .danger { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;}
+        .flashes .info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb;}
+        .flashes .warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba;}
+
+        #turnForm {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        }
+        #turnForm label {
+            display: block;
+            margin-top: 10px;
+            margin-bottom: 3px;
+            font-weight: bold;
+        }
+        #turnForm input[type="text"],
+        #turnForm input[type="number"],
+        #turnForm select {
+            width: calc(100% - 22px); /* Full width minus padding/border */
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        #turnForm input[type="checkbox"] {
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+
+        #turnForm .order-inputs {
+            padding: 15px;
+            border: 1px dashed #ccc;
+            margin-top: 15px;
+            background-color: #f9f9f9;
+        }
+        #turnForm .order-inputs h4 { margin-top: 0; }
+        #turnForm .order-inputs label { font-weight: normal; font-size: 0.9em; }
+        #turnForm .order-inputs input[type="text"],
+        #turnForm .order-inputs input[type="number"],
+        #turnForm .order-inputs select {
+             width: calc(100% - 18px); padding: 6px; font-size: 0.95em; margin-bottom: 8px;
+        }
+
+
+        #addOrderBtn, #submitTurnBtn {
+            background-color: #5cb85c;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        #addOrderBtn:hover, #submitTurnBtn:hover {
+            background-color: #4cae4c;
+        }
+        #submitTurnBtn { background-color: #007bff; }
+        #submitTurnBtn:hover { background-color: #0069d9; }
+
+
+        #queuedOrdersList {
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 4px;
+            min-height: 50px;
+            margin-top:10px;
+        }
+        #queuedOrdersList p { margin-top: 0; font-style: italic; }
+        #queuedOrdersList div {
+            background-color: #fff;
+            padding: 8px;
+            margin-bottom: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 3px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #queuedOrdersList div button {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+        #queuedOrdersList div button:hover {
+            background-color: #c82333;
+        }
+        hr {
+            border: 0;
+            height: 1px;
+            background: #ddd;
+            margin: 20px 0;
+        }
+        small { font-size: 0.8em; color: #666; }
+
+    </style>
+</head>
 <body>
-<h1>Game</h1>
-<table>
-    {% for world in game.worlds %}
-        <td> id {{ world.id }}</td>
-        <td> name {{ world.name }}</td>
-        <td> owner {{ world.owner }}</td>
-        <td> connections</td>
-        <table>
-        {% for connection in world.connections %}
-            <tr>
-                <td> {{ connection.id }} </td>
-                <td> {{ connection.name }} </td>
-                <td> {{ connection.owner }} </td>
-            </tr>
-        {% endfor %}
-        <td>{{ world.iships }}</td>
-        <td>{{ world.pships }}</td>
-        <td>{{ world.population }}</td>
-        <td>{{ world.max_population }}</td>
-        <td>{{ world.industry }}</td>
-        <td>{{ world.mines }}</td>
-        <td>{{ world.stockpile }}</td>
-        <td> artifacts {{ world.artifacts }}</td>
-        </tr>
-    {% endfor %}
-    </table>
+    <header>
+        <h1>StarWeb Game</h1>
+    </header>
+    <nav>
+        {% if current_user.is_authenticated %}
+            Logged in as: <strong>{{ current_user.username }}</strong> |
+            <a href="{{ url_for('logout') }}">Logout</a>
+        {% else %}
+            <a href="{{ url_for('login') }}">Login</a> |
+            <a href="{{ url_for('register') }}">Register</a>
+        {% endif %}
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <ul class="flashes">
+            {% for category, message in messages %}
+              <li class="{{ category }}">{{ message }}</li>
+            {% endfor %}
+            </ul>
+          {% endif %}
+        {% endwith %}
+
+        {% if current_player_ingame %}
+        <section class="player-summary">
+            <h3>Your Empire: {{ current_player_ingame.name }} ({{ current_player_ingame.character_type }})</h3>
+            {% if current_player_ingame.home_world %}
+                <p><strong>Homeworld:</strong> {{ current_player_ingame.home_world.name }} (ID: {{ current_player_ingame.home_world.id }})</p>
+                <ul>
+                    <li>Population: {{ current_player_ingame.home_world.population }} / {{ current_player_ingame.home_world.max_population }}</li>
+                    <li>Industry: {{ current_player_ingame.home_world.industry }}</li>
+                    <li>Mines: {{ current_player_ingame.home_world.mines }}</li>
+                    <li>Metal Stockpile: {{ current_player_ingame.home_world.stockpile }}</li>
+                    <li>I-Ships: {{ current_player_ingame.home_world.iships }}</li>
+                    <li>P-Ships: {{ current_player_ingame.home_world.pships }}</li>
+                </ul>
+
+                <h4>Your Fleets:</h4>
+                {% if current_player_ingame.fleets %}
+                    <ul>
+                    {% for fleet in current_player_ingame.fleets %}
+                        <li>
+                            <strong>{{ fleet.name }} (ID: {{ fleet.id }})</strong>
+                            - Location: {{ fleet.location.name if fleet.location else 'N/A' }} (ID: {{ fleet.location.id if fleet.location else 'N/A' }})
+                            - Ships: {{ fleet.ships }}
+                            - Cargo: {{ fleet.cargo }}
+                        </li>
+                    {% endfor %}
+                    </ul>
+                {% else %}
+                    <p>You have no fleets assigned.</p>
+                {% endif %}
+            {% else %}
+                <p>You do not have a homeworld assigned in the game yet.</p>
+            {% endif %}
+        </section>
+        {% endif %}
+
+        <section id="galaxy-view">
+            <h2>{% if is_admin_view %}Full Galaxy Worlds List (Admin View){% else %}Known Worlds{% endif %}</h2>
+            <div style="overflow-x:auto;"> <!-- For responsive tables -->
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Owner</th>
+                        <th>Connections</th>
+                        <th>I-Ships</th>
+                        <th>P-Ships</th>
+                        <th>Population</th>
+                        <th>Max Pop</th>
+                        <th>Industry</th>
+                        <th>Mines</th>
+                        <th>Stockpile</th>
+                        <th>Artifacts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for world in worlds_to_display %}
+                        <tr>
+                            <td>{{ world.id }}</td>
+                            <td>{{ world.name }}</td>
+                            <td>{{ world.owner.name if world.owner else 'Unowned' }}</td>
+                            <td>
+                                {% for conn in world.connections %}
+                                    W{{ conn.id }}{% if not loop.last %}, {% endif %}
+                                {% else %}
+                                    None
+                                {% endfor %}
+                            </td>
+                            <td>{{ world.iships }}</td>
+                            <td>{{ world.pships }}</td>
+                            <td>{{ world.population }}</td>
+                            <td>{{ world.max_population }}</td>
+                            <td>{{ world.industry }}</td>
+                            <td>{{ world.mines }}</td>
+                            <td>{{ world.stockpile }}</td>
+                            <td>
+                                {% if world.artifacts %}
+                                <ul>
+                                {% for artifact in world.artifacts %}
+                                    <li>{{ artifact.name }} ({{artifact.id}})</li>
+                                {% endfor %}
+                                </ul>
+                                {% else %}
+                                    None
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="12">No worlds to display.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+
+            <h2>{% if is_admin_view %}Full Galaxy Fleets List (Admin View){% else %}Known Fleets{% endif %}</h2>
+            {% if fleets_to_display %}
+            <div style="overflow-x:auto;"> <!-- For responsive tables -->
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Owner</th>
+                        <th>Location</th>
+                        <th>Ships</th>
+                        <th>Cargo</th>
+                        <th>Artifacts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fleet in fleets_to_display %}
+                        <tr>
+                            <td>{{ fleet.id }}</td>
+                            <td>{{ fleet.name }}</td>
+                            <td>{{ fleet.owner.name if fleet.owner else 'Unowned' }}</td>
+                            <td>{{ fleet.location.name if fleet.location else 'N/A' }} (ID: {{ fleet.location.id if fleet.location else 'N/A' }})</td>
+                            <td>{{ fleet.ships }}</td>
+                            <td>{{ fleet.cargo }}</td>
+                            <td>
+                                {% if fleet.artifacts %}
+                                <ul>
+                                {% for artifact in fleet.artifacts %}
+                                    <li>{{ artifact.name }} ({{artifact.id}})</li>
+                                {% endfor %}
+                                </ul>
+                                {% else %}
+                                    None
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="7">No fleets to display.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+            <p>No fleets in the game.</p>
+            {% endif %}
+        </section>
+
+        <hr>
+
+        {% if is_admin_view %}
+        <section id="admin-graph-view">
+            <h2>Admin Game State Graph</h2>
+            <div id="adminGraphContainer" style="width: 100%; overflow: auto; text-align: center; border: 1px solid #ccc; padding: 10px; margin-top: 20px;">
+                <img src="{{ url_for('admin_game_state_graph_svg') }}" alt="Game State Graph" style="max-width: 100%; height: auto;">
+            </div>
+        </section>
+        <hr>
+        {% endif %}
+
+        <section id="turn-planning">
+            <h2>Plan Your Turn</h2>
+            <form id="turnForm" method="POST" action="{{ url_for('submit_turn') }}">
+                <input type="hidden" name="orders_json" id="ordersJsonInput">
+
+                <div>
+                    <label for="orderType">Select Order Type:</label>
+                    <select id="orderType">
+                        <option value="MOVE">Move Fleet</option>
+                        <option value="TRANSFER">Transfer Ships</option>
+                        <option value="LOAD_CARGO">Load Cargo</option>
+                        <option value="UNLOAD_CARGO">Unload Cargo</option>
+                        <option value="BUILD">Build</option>
+                        <option value="FIRE">Fire</option>
+                        <option value="ATTACH_ARTIFACT">Attach Artifact</option>
+                        <option value="DROP_ARTIFACT">Drop Artifact</option>
+                        <option value="AMBUSH">Set Ambush</option>
+                        <option value="SET_ALLY">Set Ally</option>
+                        <option value="GIFT_WORLD">Gift World</option>
+                        <option value="GIFT_FLEET">Gift Fleet</option>
+                    </select>
+                </div>
+
+                <!-- Order Specific Inputs: Grouped by fieldset for better structure -->
+                <fieldset id="moveInputs" class="order-inputs">
+                    <legend>Move Fleet Details</legend>
+                    <label for="moveFleetId">Fleet ID to Move:</label>
+                    <input type="number" id="moveFleetId" placeholder="Fleet ID">
+                    <label for="moveWorld1Id">Destination World ID 1:</label>
+                    <input type="number" id="moveWorld1Id" placeholder="World ID 1">
+                    <label for="moveWorld2Id">Destination World ID 2 (optional):</label>
+                    <input type="number" id="moveWorld2Id" placeholder="World ID 2">
+                </fieldset>
+
+                <fieldset id="transferInputs" class="order-inputs" style="display: none;">
+                    <legend>Transfer Ships Details</legend>
+                    <label for="transferShipCount">Ships to Transfer:</label>
+                    <input type="number" id="transferShipCount" placeholder="Amount">
+                    <label for="transferFromEntityType">From Entity Type:</label>
+                    <select id="transferFromEntityType">
+                        <option value="FLEET">Fleet</option>
+                        <option value="ISHIP">ISHIPs (at World)</option>
+                        <option value="PSHIP">PSHIPs (at World)</option>
+                    </select>
+                    <label for="transferFromId">From ID (Fleet or World):</label>
+                    <input type="number" id="transferFromId" placeholder="Source ID">
+                    <label for="transferToEntityType">To Entity Type:</label>
+                    <select id="transferToEntityType">
+                        <option value="FLEET">Fleet</option>
+                        <option value="ISHIP">ISHIPs (at World)</option>
+                        <option value="PSHIP">PSHIPs (at World)</option>
+                    </select>
+                    <label for="transferToId">To ID (Fleet or World):</label>
+                    <input type="number" id="transferToId" placeholder="Target ID">
+                </fieldset>
+
+                <fieldset id="loadInputs" class="order-inputs" style="display: none;">
+                    <legend>Load Cargo Details</legend>
+                    <label for="loadFleetId">Fleet ID to Load:</label>
+                    <input type="number" id="loadFleetId" placeholder="Fleet ID">
+                    <label for="loadWorldId">World ID (Fleet's Location):</label>
+                    <input type="number" id="loadWorldId" placeholder="World ID">
+                    <label for="loadMetalAmount">Metal Amount (-1 for all):</label>
+                    <input type="number" id="loadMetalAmount" value="-1">
+                </fieldset>
+
+                <fieldset id="unloadInputs" class="order-inputs" style="display: none;">
+                    <legend>Unload Cargo Details</legend>
+                    <label for="unloadFleetId">Fleet ID to Unload:</label>
+                    <input type="number" id="unloadFleetId" placeholder="Fleet ID">
+                    <label for="unloadWorldId">World ID (Fleet's Location):</label>
+                    <input type="number" id="unloadWorldId" placeholder="World ID">
+                    <label for="unloadMetalAmount">Metal Amount (-1 for all):</label>
+                    <input type="number" id="unloadMetalAmount" value="-1">
+                    <div>
+                        <input type="checkbox" id="unloadAsCG" style="width: auto; margin-right: 5px;">
+                        <label for="unloadAsCG" style="display: inline; font-weight: normal;">Unload as Consumer Goods?</label>
+                    </div>
+                </fieldset>
+
+                <fieldset id="buildInputs" class="order-inputs" style="display: none;">
+                    <legend>Build Order Details</legend>
+                    <label for="buildWorldId">World ID to Build At:</label>
+                    <input type="number" id="buildWorldId" placeholder="World ID">
+                    <label for="buildTypeSelect">Build Type:</label>
+                    <select id="buildTypeSelect">
+                        <option value="SHIP_FLEET">Ships for Fleet</option>
+                        <option value="SHIP_ISHOP">ISHIPs</option>
+                        <option value="SHIP_PSHIP">PSHIPs</option>
+                        <option value="INDUSTRY">Industry</option>
+                        <option value="POP_LIMIT">Population Limit</option>
+                        <option value="MIGRATE_POP">Migrate Population</option>
+                        <option value="ROBOTS">Robots (Berserker)</option>
+                    </select>
+                    <label for="buildQuantity">Quantity:</label>
+                    <input type="number" id="buildQuantity" placeholder="Amount">
+                    <label for="buildTargetEntityId">Target Fleet/World ID (Optional):</label>
+                    <input type="number" id="buildTargetEntityId" placeholder="Target ID">
+                    <label for="buildMigrationPopType">Migration Population Type (Optional for Migrate Pop):</label>
+                    <select id="buildMigrationPopType">
+                        <option value="NORMAL">Normal</option>
+                        <option value="ROBOT">Robot</option>
+                        <option value="CONVERT">Convert</option>
+                    </select>
+                </fieldset>
+
+                <fieldset id="fireInputs" class="order-inputs" style="display: none;">
+                    <legend>Fire Order Details</legend>
+                    <label for="fireFiringFleetId">Firing Fleet ID:</label>
+                    <input type="number" id="fireFiringFleetId" placeholder="Fleet ID">
+                    <label for="fireWorldId">World ID of Combat:</label>
+                    <input type="number" id="fireWorldId" placeholder="World ID">
+                    <label for="fireTargetTypeSelect">Target Type:</label>
+                    <select id="fireTargetTypeSelect">
+                        <option value="FLEET">Fleet</option>
+                        <option value="INDUSTRY">Industry</option>
+                        <option value="POPULATION">Population</option>
+                        <option value="HOME_FLEETS">Home Fleets</option>
+                    </select>
+                    <label for="fireTargetFleetId">Target Fleet ID (if targeting Fleet):</label>
+                    <input type="number" id="fireTargetFleetId" placeholder="Target Fleet ID">
+                    <div>
+                        <input type="checkbox" id="fireIsConditional" style="width: auto; margin-right: 5px;">
+                        <label for="fireIsConditional" style="display: inline; font-weight: normal;">Conditional Fire?</label>
+                    </div>
+                </fieldset>
+
+                <fieldset id="attachArtifactInputs" class="order-inputs" style="display: none;">
+                    <legend>Attach Artifact Details</legend>
+                    <label for="attachArtifactFleetId">Fleet ID to Attach To:</label>
+                    <input type="number" id="attachArtifactFleetId" placeholder="Fleet ID">
+                    <label for="attachArtifactId">Artifact ID:</label>
+                    <input type="text" id="attachArtifactId" placeholder="Artifact ID (e.g., V1)">
+                    <label for="attachArtifactSourceWorldId">Source World ID (Optional):</label>
+                    <input type="number" id="attachArtifactSourceWorldId" placeholder="World ID of Artifact">
+                    <small>If Source World ID is empty, artifact is assumed to be on another of your fleets at the same location.</small>
+                </fieldset>
+
+                <fieldset id="dropArtifactInputs" class="order-inputs" style="display: none;">
+                    <legend>Drop Artifact Details</legend>
+                    <label for="dropArtifactFleetId">Fleet ID to Drop From:</label>
+                    <input type="number" id="dropArtifactFleetId" placeholder="Fleet ID">
+                    <label for="dropArtifactId">Artifact ID:</label>
+                    <input type="text" id="dropArtifactId" placeholder="Artifact ID (e.g., V1)">
+                    <label for="dropArtifactTargetWorldId">Target World ID to Drop At:</label>
+                    <input type="number" id="dropArtifactTargetWorldId" placeholder="World ID">
+                </fieldset>
+
+                <fieldset id="ambushInputs" class="order-inputs" style="display: none;">
+                    <legend>Set Ambush Details</legend>
+                    <label for="ambushFleetId">Fleet ID to Set Ambush:</label>
+                    <input type="number" id="ambushFleetId" placeholder="Fleet ID">
+                    <label for="ambushWorldId">World ID for Ambush:</label>
+                    <input type="number" id="ambushWorldId" placeholder="World ID">
+                </fieldset>
+
+                <fieldset id="setAllyInputs" class="order-inputs" style="display: none;">
+                    <legend>Set Ally Details</legend>
+                    <label for="setAllyTargetPlayerId">Target Player User ID:</label>
+                    <input type="text" id="setAllyTargetPlayerId" placeholder="Target Player User ID">
+                </fieldset>
+
+                <fieldset id="giftWorldInputs" class="order-inputs" style="display: none;">
+                    <legend>Gift World Details</legend>
+                    <label for="giftWorldId">World ID to Gift:</label>
+                    <input type="number" id="giftWorldId" placeholder="World ID">
+                    <label for="giftWorldRecipientPlayerId">Recipient Player User ID:</label>
+                    <input type="text" id="giftWorldRecipientPlayerId" placeholder="Recipient Player User ID">
+                </fieldset>
+
+                <fieldset id="giftFleetInputs" class="order-inputs" style="display: none;">
+                    <legend>Gift Fleet Details</legend>
+                    <label for="giftFleetId">Fleet ID to Gift:</label>
+                    <input type="number" id="giftFleetId" placeholder="Fleet ID">
+                    <label for="giftFleetRecipientPlayerId">Recipient Player User ID:</label>
+                    <input type="text" id="giftFleetRecipientPlayerId" placeholder="Recipient Player User ID">
+                </fieldset>
+
+                <button type="button" id="addOrderBtn" style="margin-top: 20px; margin-bottom:15px;">Add Order to Turn</button>
+
+                <h3>Queued Orders for This Turn:</h3>
+                <div id="queuedOrdersList">
+                    <!-- Orders will be listed here -->
+                </div>
+
+                <button type="submit" id="submitTurnBtn" style="margin-top: 20px;">Submit Turn</button>
+            </form>
+        </section>
+    </div> <!-- end .container -->
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const orderTypeSelect = document.getElementById('orderType');
+            const addOrderBtn = document.getElementById('addOrderBtn');
+            const queuedOrdersListDiv = document.getElementById('queuedOrdersList');
+            const turnForm = document.getElementById('turnForm');
+            const ordersJsonInput = document.getElementById('ordersJsonInput');
+
+            const inputGroups = {
+                'MOVE': document.getElementById('moveInputs'),
+                'TRANSFER': document.getElementById('transferInputs'),
+                'LOAD_CARGO': document.getElementById('loadInputs'),
+                'UNLOAD_CARGO': document.getElementById('unloadInputs'),
+                'BUILD': document.getElementById('buildInputs'),
+                'FIRE': document.getElementById('fireInputs'),
+                'ATTACH_ARTIFACT': document.getElementById('attachArtifactInputs'),
+                'DROP_ARTIFACT': document.getElementById('dropArtifactInputs'),
+                'AMBUSH': document.getElementById('ambushInputs'),
+                'SET_ALLY': document.getElementById('setAllyInputs'),
+                'GIFT_WORLD': document.getElementById('giftWorldInputs'),
+                'GIFT_FLEET': document.getElementById('giftFleetInputs')
+            };
+
+            let queuedOrders = [];
+            const currentPlayerId = {{ current_player_ingame.user_id|tojson|safe if current_player_ingame else 'null' }};
+
+            function updateOrderFormInputs() {
+                const selectedType = orderTypeSelect.value;
+                for (const type in inputGroups) {
+                    if (inputGroups[type]) { // Check if element exists
+                        inputGroups[type].style.display = 'none';
+                    }
+                }
+                if (inputGroups[selectedType]) { // Check if element exists
+                    inputGroups[selectedType].style.display = 'block';
+                }
+            }
+
+            function renderQueuedOrders() {
+                queuedOrdersListDiv.innerHTML = ''; // Clear current list
+                if (queuedOrders.length === 0) {
+                    queuedOrdersListDiv.innerHTML = '<p>No orders queued yet.</p>';
+                }
+                queuedOrders.forEach((order, index) => {
+                    const orderDiv = document.createElement('div');
+                    // Styles moved to CSS:
+                    // orderDiv.style.marginBottom = '5px';
+                    // orderDiv.style.padding = '5px';
+                    // orderDiv.style.border = '1px solid #eee';
+                    
+                    let desc = `Order ${index + 1}: [${order.order_type}] `;
+                    switch(order.order_type) {
+                        case 'MOVE':
+                            desc += `Fleet ${order.fleet_id} to World ${order.target_world_ids[0]}`;
+                            if (order.target_world_ids.length > 1 && order.target_world_ids[1]) {
+                                desc += ` then to World ${order.target_world_ids[1]}`;
+                            }
+                            break;
+                        case 'TRANSFER':
+                            desc += `${order.ship_count} ships from ${order.from_entity_type} ID ${order.from_id} to ${order.to_entity_type} ID ${order.to_id}`;
+                            break;
+                        case 'LOAD_CARGO':
+                            desc += `Fleet ${order.fleet_id} load ${order.metal_amount === -1 ? 'all' : order.metal_amount} metal from World ${order.world_id}`;
+                            break;
+                        case 'UNLOAD_CARGO':
+                            desc += `Fleet ${order.fleet_id} unload ${order.metal_amount === -1 ? 'all' : order.metal_amount} metal at World ${order.world_id}`;
+                            if (order.as_consumer_goods) desc += ' as Consumer Goods';
+                            break;
+                        case 'BUILD':
+                            desc += `World ${order.world_id} build ${order.quantity} of ${order.build_type}`;
+                            if (order.target_entity_id) desc += ` -> Target ID: ${order.target_entity_id}`;
+                            if (order.migration_pop_type) desc += ` (Type: ${order.migration_pop_type})`;
+                            break;
+                        case 'FIRE':
+                            desc += `Fleet ${order.firing_fleet_id} at World ${order.world_id} fire at ${order.target_type}`;
+                            if (order.target_id) desc += ` ID: ${order.target_id}`;
+                            if (order.is_conditional) desc += ' (Conditional)';
+                            break;
+                        case 'ATTACH_ARTIFACT':
+                            desc += `Fleet ${order.fleet_id} attach artifact ${order.artifact_id}`;
+                            if (order.world_id !== null && order.world_id !== undefined) {
+                                desc += ` from World ${order.world_id}`;
+                            } else {
+                                desc += ` from another fleet at same location`;
+                            }
+                            break;
+                        case 'DROP_ARTIFACT':
+                            desc += `Fleet ${order.fleet_id} drop artifact ${order.artifact_id} at World ${order.world_id}`;
+                            break;
+                        case 'AMBUSH':
+                            desc += `Fleet ${order.fleet_id} will ambush at World ${order.world_id}`;
+                            break;
+                        case 'SET_ALLY':
+                            desc += `Declare alliance with Player ${order.target_player_id}`;
+                            break;
+                        case 'GIFT_WORLD':
+                            desc += `Gift World ${order.world_id} to Player ${order.recipient_player_id}`;
+                            break;
+                        case 'GIFT_FLEET':
+                            desc += `Gift Fleet ${order.fleet_id} to Player ${order.recipient_player_id}`;
+                            break;
+                        default:
+                            desc += 'Unknown order type';
+                    }
+                    
+                    const textNode = document.createTextNode(desc + " "); // Add space before button
+                    orderDiv.appendChild(textNode);
+
+
+                    const removeBtn = document.createElement('button');
+                    removeBtn.textContent = 'Remove';
+                    removeBtn.type = 'button';
+                    // Styles moved to CSS:
+                    // removeBtn.style.marginLeft = '10px';
+                    removeBtn.dataset.index = index;
+                    removeBtn.addEventListener('click', function() {
+                        queuedOrders.splice(parseInt(this.dataset.index), 1);
+                        renderQueuedOrders();
+                    });
+                    orderDiv.appendChild(removeBtn);
+                    queuedOrdersListDiv.appendChild(orderDiv);
+                });
+            }
+
+            addOrderBtn.addEventListener('click', function () {
+                const selectedType = orderTypeSelect.value;
+                let newOrder = { order_type: selectedType, player_id: currentPlayerId };
+                let valid = true;
+
+                switch (selectedType) {
+                    case 'MOVE':
+                        const moveFleetId = parseInt(document.getElementById('moveFleetId').value);
+                        const moveWorld1Id = parseInt(document.getElementById('moveWorld1Id').value);
+                        const moveWorld2IdStr = document.getElementById('moveWorld2Id').value;
+                        const moveWorld2Id = moveWorld2IdStr ? parseInt(moveWorld2IdStr) : null;
+                        
+                        if (isNaN(moveFleetId) || isNaN(moveWorld1Id)) { valid = false; alert("Fleet ID and World 1 ID are required for Move order."); break;}
+
+                        newOrder.fleet_id = moveFleetId;
+                        newOrder.target_world_ids = [moveWorld1Id];
+                        if (moveWorld2Id !== null && !isNaN(moveWorld2Id)) {
+                            newOrder.target_world_ids.push(moveWorld2Id);
+                        }
+                        break;
+                    case 'TRANSFER':
+                        const shipCount = parseInt(document.getElementById('transferShipCount').value);
+                        const fromType = document.getElementById('transferFromEntityType').value;
+                        const fromId = parseInt(document.getElementById('transferFromId').value);
+                        const toType = document.getElementById('transferToEntityType').value;
+                        const toId = parseInt(document.getElementById('transferToId').value);
+
+                        if (isNaN(shipCount) || isNaN(fromId) || isNaN(toId) || shipCount <=0) { valid = false; alert("Valid Ship Count, From ID, and To ID are required for Transfer."); break; }
+                        
+                        newOrder.ship_count = shipCount;
+                        newOrder.from_entity_type = fromType;
+                        newOrder.from_id = fromId;
+                        newOrder.to_entity_type = toType;
+                        newOrder.to_id = toId;
+                        break;
+                    case 'LOAD_CARGO':
+                        const loadFleetId = parseInt(document.getElementById('loadFleetId').value);
+                        const loadWorldId = parseInt(document.getElementById('loadWorldId').value);
+                        const loadMetalAmount = parseInt(document.getElementById('loadMetalAmount').value);
+                        if (isNaN(loadFleetId) || isNaN(loadWorldId) || isNaN(loadMetalAmount)) { valid = false; alert("Valid Fleet ID, World ID, and Metal Amount are required for Load Cargo."); break; }
+
+                        newOrder.fleet_id = loadFleetId;
+                        newOrder.world_id = loadWorldId;
+                        newOrder.metal_amount = loadMetalAmount;
+                        break;
+                    case 'UNLOAD_CARGO':
+                        const unloadFleetId = parseInt(document.getElementById('unloadFleetId').value);
+                        const unloadWorldId = parseInt(document.getElementById('unloadWorldId').value);
+                        const unloadMetalAmount = parseInt(document.getElementById('unloadMetalAmount').value);
+                        if (isNaN(unloadFleetId) || isNaN(unloadWorldId) || isNaN(unloadMetalAmount)) { valid = false; alert("Valid Fleet ID, World ID, and Metal Amount are required for Unload Cargo."); break; }
+                        
+                        newOrder.fleet_id = unloadFleetId;
+                        newOrder.world_id = unloadWorldId;
+                        newOrder.metal_amount = unloadMetalAmount;
+                        newOrder.as_consumer_goods = document.getElementById('unloadAsCG').checked;
+                        break;
+                    case 'BUILD':
+                        const buildWorldId = parseInt(document.getElementById('buildWorldId').value);
+                        const buildType = document.getElementById('buildTypeSelect').value;
+                        const buildQuantity = parseInt(document.getElementById('buildQuantity').value);
+                        const buildTargetEntityIdStr = document.getElementById('buildTargetEntityId').value;
+                        
+                        if (isNaN(buildWorldId) || isNaN(buildQuantity) || buildQuantity <= 0) { valid = false; alert("Valid World ID and positive Quantity are required for Build order."); break; }
+
+                        newOrder.world_id = buildWorldId;
+                        newOrder.build_type = buildType;
+                        newOrder.quantity = buildQuantity;
+                        newOrder.target_entity_id = buildTargetEntityIdStr ? parseInt(buildTargetEntityIdStr) : null;
+                        if (newOrder.build_type === 'MIGRATE_POP') {
+                            newOrder.migration_pop_type = document.getElementById('buildMigrationPopType').value;
+                        }
+                        break;
+                    case 'FIRE':
+                        const fireFiringFleetId = parseInt(document.getElementById('fireFiringFleetId').value);
+                        const fireTargetType = document.getElementById('fireTargetTypeSelect').value;
+                        const fireWorldId = parseInt(document.getElementById('fireWorldId').value);
+                        const fireTargetFleetIdStr = document.getElementById('fireTargetFleetId').value;
+
+                        if (isNaN(fireFiringFleetId) || isNaN(fireWorldId)) { valid = false; alert("Valid Firing Fleet ID and World ID are required for Fire order."); break; }
+                        if (fireTargetType === 'FLEET' && (!fireTargetFleetIdStr || isNaN(parseInt(fireTargetFleetIdStr)))) { valid = false; alert("Target Fleet ID is required when Target Type is FLEET."); break; }
+                        
+                        newOrder.firing_fleet_id = fireFiringFleetId;
+                        newOrder.target_type = fireTargetType;
+                        newOrder.world_id = fireWorldId;
+                        newOrder.target_id = fireTargetType === 'FLEET' && fireTargetFleetIdStr ? parseInt(fireTargetFleetIdStr) : null;
+                        newOrder.is_conditional = document.getElementById('fireIsConditional').checked;
+                        break;
+                    case 'ATTACH_ARTIFACT':
+                        const attachFleetId = parseInt(document.getElementById('attachArtifactFleetId').value);
+                        const attachArtifactId = document.getElementById('attachArtifactId').value;
+                        const attachSourceWorldIdStr = document.getElementById('attachArtifactSourceWorldId').value;
+                        const attachSourceWorldId = attachSourceWorldIdStr ? parseInt(attachSourceWorldIdStr) : null;
+
+                        if (isNaN(attachFleetId) || !attachArtifactId) { valid = false; alert("Fleet ID and Artifact ID are required for Attach Artifact."); break; }
+                        if (attachSourceWorldIdStr && isNaN(attachSourceWorldId)) { valid = false; alert("Source World ID must be a number if provided."); break;}
+                        
+                        newOrder.fleet_id = attachFleetId;
+                        newOrder.artifact_id = attachArtifactId;
+                        newOrder.world_id = attachSourceWorldId; // Can be null
+                        break;
+                    case 'DROP_ARTIFACT':
+                        const dropFleetId = parseInt(document.getElementById('dropArtifactFleetId').value);
+                        const dropArtifactId = document.getElementById('dropArtifactId').value;
+                        const dropTargetWorldId = parseInt(document.getElementById('dropArtifactTargetWorldId').value);
+
+                        if (isNaN(dropFleetId) || !dropArtifactId || isNaN(dropTargetWorldId)) { valid = false; alert("Fleet ID, Artifact ID, and Target World ID are required for Drop Artifact."); break; }
+
+                        newOrder.fleet_id = dropFleetId;
+                        newOrder.artifact_id = dropArtifactId;
+                        newOrder.world_id = dropTargetWorldId;
+                        break;
+                    case 'AMBUSH':
+                        const ambushFleetId = parseInt(document.getElementById('ambushFleetId').value);
+                        const ambushWorldId = parseInt(document.getElementById('ambushWorldId').value);
+
+                        if (isNaN(ambushFleetId) || isNaN(ambushWorldId)) { valid = false; alert("Fleet ID and World ID are required for Ambush order."); break; }
+                        
+                        newOrder.fleet_id = ambushFleetId;
+                        newOrder.world_id = ambushWorldId;
+                        break;
+                    case 'SET_ALLY':
+                        const targetPlayerId = document.getElementById('setAllyTargetPlayerId').value;
+                        if (!targetPlayerId) { valid = false; alert("Target Player User ID is required for Set Ally."); break; }
+                        newOrder.target_player_id = targetPlayerId;
+                        break;
+                    case 'GIFT_WORLD':
+                        const giftWorldId = parseInt(document.getElementById('giftWorldId').value);
+                        const giftWorldRecipientPlayerId = document.getElementById('giftWorldRecipientPlayerId').value;
+                        if (isNaN(giftWorldId) || !giftWorldRecipientPlayerId) { valid = false; alert("World ID and Recipient Player User ID are required for Gift World."); break; }
+                        newOrder.world_id = giftWorldId;
+                        newOrder.recipient_player_id = giftWorldRecipientPlayerId;
+                        break;
+                    case 'GIFT_FLEET':
+                        const giftFleetId = parseInt(document.getElementById('giftFleetId').value);
+                        const giftFleetRecipientPlayerId = document.getElementById('giftFleetRecipientPlayerId').value;
+                        if (isNaN(giftFleetId) || !giftFleetRecipientPlayerId) { valid = false; alert("Fleet ID and Recipient Player User ID are required for Gift Fleet."); break; }
+                        newOrder.fleet_id = giftFleetId;
+                        newOrder.recipient_player_id = giftFleetRecipientPlayerId;
+                        break;
+                    default:
+                        valid = false;
+                        alert('Unknown order type selected.');
+                        break;
+                }
+
+                if (valid) {
+                    queuedOrders.push(newOrder);
+                    renderQueuedOrders();
+                    // Optionally clear inputs here
+                }
+            });
+
+            turnForm.addEventListener('submit', function (event) {
+                // No longer preventing default submission as action is now set
+                ordersJsonInput.value = JSON.stringify(queuedOrders);
+                // Consider clearing queuedOrders array from JS if desired for immediate UI feedback,
+                // though page reload on redirect will also clear it.
+                // For example: queuedOrders = []; renderQueuedOrders();
+                // However, this might be too fast if submission fails and user wants to see their orders.
+                // Relying on page reload is simpler for now.
+            });
+
+            // Initial setup
+            updateOrderFormInputs();
+            renderQueuedOrders(); // To show "No orders queued yet."
+            orderTypeSelect.addEventListener('change', updateOrderFormInputs);
+        });
+    </script>
+
 </body>
 </html>
