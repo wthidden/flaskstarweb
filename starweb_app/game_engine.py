@@ -1,5 +1,6 @@
 import random
 import json # For order_from_dict if it handles JSON strings directly (though it takes dicts)
+import math # Added for math.ceil in RobotAttackOrder
 from typing import List, Optional, Dict, Tuple # For type hints
 
 # Imports from local packages (starweb_app)
@@ -9,7 +10,8 @@ from .models import (
 )
 from .orders import (
     Order, # Simpler base Order from app.py
-    MoveOrder, TransferOrder, LoadCargoOrder, UnloadCargoOrder, BuildOrder, FireOrder, # Orders from app.py
+    MoveOrder, TransferOrder, LoadCargoOrder, UnloadCargoOrder, BuildOrder, FireOrder, PlunderOrder, # Orders from app.py
+    BuildPBBOrder, DropPBBOrder, DeclareJihadOrder, ScrapISHPsForIndustryOrder, RobotAttackOrder, # PBB, Jihad, Scrap ISHP, and Robot Attack Orders
     # Original orders (now inheriting from OrderWithPlayerId)
     OrderWithPlayerId, # Base class for original orders
     AttachArtifactOrder, DropArtifactOrder, AmbushOrder, SetAllyOrder, GiftWorldOrder, GiftFleetOrder
@@ -294,10 +296,26 @@ class Game:
         num_shots = num_effective_ships
         if num_shots <= 0: return False, f"Fleet {firing_fleet.name} has 0 effective ships to fire."
 
-        if current_player.character_type == "Apostle":
+        # Apostle Jihad shooting penalty/bonus logic
+        is_apostle_on_valid_jihad_target = False
+        if current_player.character_type == "Apostle" and current_player.jihad_target_player_id:
+            target_owner_id_for_jihad_check = None
+            if order.target_type == "FLEET":
+                target_fleet_for_jihad = self.get_fleet(order.target_id)
+                if target_fleet_for_jihad and target_fleet_for_jihad.owner:
+                    target_owner_id_for_jihad_check = target_fleet_for_jihad.owner.user_id
+            elif order.target_type in ["INDUSTRY", "POPULATION", "HOME_FLEETS"]:
+                if world.owner:
+                    target_owner_id_for_jihad_check = world.owner.user_id
+            
+            if target_owner_id_for_jihad_check == current_player.jihad_target_player_id:
+                is_apostle_on_valid_jihad_target = True
+                self.add_turn_event(current_player.user_id, f"Firing upon Jihad target {target_owner_id_for_jihad_check} - shooting penalty waived.")
+        
+        if current_player.character_type == "Apostle" and not is_apostle_on_valid_jihad_target:
             apostle_penalty_vp = num_shots * -1
             self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + apostle_penalty_vp
-            self.add_turn_event(current_player.user_id, f"Lost {abs(apostle_penalty_vp)} VP for firing as Apostle.")
+            self.add_turn_event(current_player.user_id, f"Lost {abs(apostle_penalty_vp)} VP for firing as Apostle (not a Jihad target).")
 
         message_parts = [f"Fleet {firing_fleet.name} (Player {current_player.name}) fires {num_shots} shots at {world.name} targeting {order.target_type}."]
         shots_remaining = num_shots
@@ -382,12 +400,15 @@ class Game:
                 if remaining_to_kill > 0:
                     killed_converts = min(world.convert_units, remaining_to_kill)
                     world.convert_units -= killed_converts; message_parts.append(f"Killed {killed_converts} converts.")
-                    if killed_converts > 0 and world.converts_owner_id and world.converts_owner_id != current_player.user_id:
+                    if killed_converts > 0 and world.converts_owner_id:
                         martyr_apostle = self.get_player_by_user_id(world.converts_owner_id)
                         if martyr_apostle and martyr_apostle.character_type == "Apostle":
-                            martyr_vp = killed_converts * 1
-                            self.turn_vp_adjustments[martyr_apostle.user_id] = self.turn_vp_adjustments.get(martyr_apostle.user_id, 0) + martyr_vp
-                            message_parts.append(f"Apostle {martyr_apostle.name} gained {martyr_vp} VP for martyrs.")
+                            if martyr_apostle.jihad_target_player_id is None: # No martyr points if martyr's owner is on Jihad
+                                martyr_vp = killed_converts * 1
+                                self.turn_vp_adjustments[martyr_apostle.user_id] = self.turn_vp_adjustments.get(martyr_apostle.user_id, 0) + martyr_vp
+                                message_parts.append(f"Apostle {martyr_apostle.name} gained {martyr_vp} VP for martyrs.")
+                            else:
+                                message_parts.append(f"Apostle {martyr_apostle.name} did not gain martyr VP for converts due to being on Jihad.")
                     if world.convert_units == 0: world.converts_owner_id = None
                     remaining_to_kill -= killed_converts
 
@@ -395,14 +416,36 @@ class Game:
                     killed_robots = min(world.robot_units, remaining_to_kill)
                     world.robot_units -= killed_robots; message_parts.append(f"Killed {killed_robots} robots.")
 
-                if current_player.character_type == "Berserker":
-                    vp_change = actual_total_pop_killed * 2
-                    self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + vp_change
-                    message_parts.append(f"Berserker {current_player.name} gained {vp_change} VP for killing population.")
-                else:
-                    vp_change = actual_total_pop_killed * -1 # Penalty for non-Berserker
-                    self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + vp_change
-                    message_parts.append(f"Player {current_player.name} lost {abs(vp_change)} VP for killing population.")
+                # VP changes for population killed
+                pop_killed_for_vp_jihad_bonus = 0
+                if is_apostle_on_valid_jihad_target: # Apostle on Jihad against this world's owner
+                    # Only count population owned by the Jihad target
+                    if world.owner and world.owner.user_id == current_player.jihad_target_player_id:
+                         pop_killed_for_vp_jihad_bonus = killed_normal + killed_converts # Robots not included
+                    if pop_killed_for_vp_jihad_bonus > 0:
+                        vp_jihad_kill = pop_killed_for_vp_jihad_bonus * 2
+                        self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + vp_jihad_kill
+                        message_parts.append(f"Apostle {current_player.name} gained {vp_jihad_kill} VP for killing {pop_killed_for_vp_jihad_bonus} population of Jihad target.")
+                
+                # Standard VP changes for non-Jihad Apostle or other character types
+                if not is_apostle_on_valid_jihad_target: # Apply standard VP if not a Jihad kill benefiting Apostle
+                    pop_killed_for_berserker_vp = killed_normal + killed_converts # Robots do not count for Berserker VP
+                    if current_player.character_type == "Berserker":
+                        if pop_killed_for_berserker_vp > 0:
+                            vp_change_berserker = pop_killed_for_berserker_vp * 2
+                            self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + vp_change_berserker
+                            message_parts.append(f"Berserker {current_player.name} gained {vp_change_berserker} VP for killing {pop_killed_for_berserker_vp} population (normal/converts).")
+                    # Non-Berserker, non-Jihad Apostle, or any other character type: standard penalty for killing any pop
+                    # This penalty is applied if current_player is not Apostle on Jihad or not Berserker.
+                    # Apostle not on Jihad already got their -1 per shot, so this is for other chars or if actual_total_pop_killed > 0 for non-shooting reasons.
+                    # The per-shot penalty for Apostle is general. This is specific to pop killing.
+                    # If it's an Apostle not on Jihad, they already got -1 per shot. This section should typically be for non-Apostle, non-Berserker.
+                    # Let's refine: only apply general penalty if not Berserker and not Apostle (since Apostle has specific rules)
+                    elif current_player.character_type != "Apostle": # Apostle penalty/bonus handled above or by per-shot rule
+                        if actual_total_pop_killed > 0: # Penalty for any pop type if not Berserker/Apostle-on-Jihad
+                            vp_change_other = actual_total_pop_killed * -1 
+                            self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + vp_change_other
+                            message_parts.append(f"Player {current_player.name} lost {abs(vp_change_other)} VP for killing {actual_total_pop_killed} population.")
             elif pships_destroyed == 0 : message_parts.append("No PSHIPS or population destroyed.")
 
 
@@ -432,6 +475,8 @@ class Game:
         if not world: return False, "World not found."
         if world.owner != current_player: return False, "Player does not own world."
         if world.is_black_hole: return False, "Cannot build in black hole."
+        if world.recovering_from_plunder_turns > 0: # Plunder recovery effect
+            return False, f"World {world.name} cannot build due to plunder recovery ({world.recovering_from_plunder_turns} turns remaining)."
 
         build_type = order.build_type.upper()
         qty = order.quantity
@@ -456,11 +501,23 @@ class Game:
 
         elif build_type == "INDUSTRY" or build_type == "POP_LIMIT":
             cost_factor = 4 if current_player.character_type == "Empire Builder" else 5
-            cost_m, cost_p, req_i = qty * cost_factor, qty * cost_factor, qty * cost_factor
-            if world.stockpile < cost_m or world.population < cost_p or world.industry < req_i: return False, f"Insufficient resources/industry for {build_type}."
-            world.stockpile -= cost_m; world.population -= cost_p
-            if build_type == "INDUSTRY": world.industry += qty
-            else: world.max_population += qty
+            # For INDUSTRY: Metal and Population cost is fixed at 5 each per unit of new industry.
+            # The cost_factor (4 for EB, 5 for others) applies to existing industry units required.
+            cost_m = qty * 5
+            cost_p = qty * 5
+            req_i = qty * cost_factor # Existing industry units needed to build new ones
+            
+            if world.stockpile < cost_m or world.population < cost_p or world.industry < req_i: 
+                return False, f"Insufficient resources/industry for {build_type}. Need M:{cost_m}, P:{cost_p}, I:{req_i}. Have M:{world.stockpile}, P:{world.population}, I:{world.industry}."
+            
+            world.stockpile -= cost_m
+            world.population -= cost_p
+            # world.industry is not consumed here, it's a requirement for operation, not a consumable resource.
+            
+            if build_type == "INDUSTRY": 
+                world.industry += qty
+            else: # POP_LIMIT
+                world.max_population += qty # Assuming POP_LIMIT also uses this cost structure.
             return True, f"Built {qty} {build_type.lower()}."
 
         elif build_type == "MIGRATE_POP":
@@ -508,7 +565,11 @@ class Game:
         fleet = self.get_fleet(order.fleet_id)
         artifact = self.get_artifact_by_id(order.artifact_id) # Uses game's ALL_ARTIFACTS
         if not fleet or not artifact: return False, "Fleet or artifact not found."
-        if fleet.owner != current_player: return False, "Fleet not owned by player."
+        
+        # Validate target fleet ownership - This is the key change
+        if fleet.owner != current_player and (not fleet.owner or fleet.owner.character_type != "Artifact Collector"):
+            return False, "Cannot attach artifact: Target fleet must be yours or belong to an Artifact Collector."
+        # If fleet.owner is None, it means it's an unowned key, which shouldn't happen for attach, but check included.
 
         source_world = self.get_world(order.world_id) if order.world_id is not None else None
         source_fleet = None
@@ -609,6 +670,248 @@ class Game:
         self.add_turn_event(recipient.user_id, f"{current_player.name} gifted {fleet.name} to you.")
         return True, f"{fleet.name} gifted from {current_player.name} to {recipient.name}."
 
+    def execute_plunder_order(self, order: PlunderOrder, current_player: Player) -> Tuple[bool, str]:
+        if not isinstance(order, PlunderOrder): return False, "Invalid order type."
+        
+        world_to_plunder = self.get_world(order.world_id)
+        if not world_to_plunder:
+            return False, f"Error: World with ID {order.world_id} not found."
+        
+        if world_to_plunder.owner != current_player:
+            return False, f"Error: Player {current_player.name} does not own World {world_to_plunder.name} (ID: {world_to_plunder.id})."
+
+        if world_to_plunder.is_black_hole:
+            return False, f"Error: Cannot plunder a Black Hole (World ID: {world_to_plunder.id})."
+
+        if world_to_plunder.recovering_from_plunder_turns > 0:
+            return False, f"Error: World {world_to_plunder.name} (ID: {world_to_plunder.id}) is still recovering from a recent plunder ({world_to_plunder.recovering_from_plunder_turns} turns left)."
+
+        vp_change = 0
+        penalty_for_non_pirate = False
+        if current_player.character_type != "Pirate":
+            vp_change = -5 # Penalty for non-Pirate
+            penalty_for_non_pirate = True
+            non_pirate_message = f"Player {current_player.name} lost 5 VP for plundering as a non-Pirate."
+            self.add_turn_event(current_player.user_id, non_pirate_message)
+            # Plunder still happens, but with penalty.
+        
+        world_to_plunder.times_plundered_this_game += 1
+        world_to_plunder.recovering_from_plunder_turns = 3
+        
+        plunder_vp_map = {1: 50, 2: 40, 3: 30, 4: 20} # VP for 1st to 4th plunder
+        pirate_vp_gain = plunder_vp_map.get(world_to_plunder.times_plundered_this_game, 10) # 10 VP for 5th+
+
+        if not penalty_for_non_pirate: # Pirates gain VP
+            vp_change = pirate_vp_gain
+        
+        if vp_change != 0: # Can be positive for Pirate, negative for non-Pirate
+            self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + vp_change
+        
+        success_message = f"World {world_to_plunder.name} (ID: {world_to_plunder.id}) plundered successfully. Times plundered: {world_to_plunder.times_plundered_this_game}."
+        if not penalty_for_non_pirate:
+            success_message += f" Pirate {current_player.name} gained {pirate_vp_gain} VP."
+            self.add_turn_event(current_player.user_id, f"Gained {pirate_vp_gain} VP for plundering {world_to_plunder.name} (Plunder #{world_to_plunder.times_plundered_this_game}).")
+        
+        return True, success_message
+
+    def execute_scrap_ishps_for_industry_order(self, order: ScrapISHPsForIndustryOrder, current_player: Player) -> Tuple[bool, str]:
+        if not isinstance(order, ScrapISHPsForIndustryOrder):
+            return False, "Invalid order type for ScrapISHPsForIndustryOrder."
+
+        world = self.get_world(order.world_id)
+        if not world:
+            return False, f"Error: World with ID {order.world_id} not found."
+
+        if world.owner != current_player:
+            return False, f"Error: Player {current_player.name} does not own World {world.name} (ID: {order.world_id})."
+
+        if order.quantity <= 0:
+            return False, "Error: Quantity of industry to create must be positive."
+        
+        # All character types can use this order, but the cost varies.
+        if current_player.character_type == "Empire Builder":
+            ishps_per_industry = 4
+        else:
+            ishps_per_industry = 6
+
+        total_ishps_needed = order.quantity * ishps_per_industry
+
+        if world.iships < total_ishps_needed:
+            return False, f"Error: Insufficient ISHPs at {world.name}. Need {total_ishps_needed}, have {world.iships}."
+
+        world.iships -= total_ishps_needed
+        world.industry += order.quantity
+        
+        success_message = f"Created {order.quantity} industry at {world.name} by scrapping {total_ishps_needed} ISHPs."
+        self.add_turn_event(current_player.user_id, success_message)
+        return True, success_message
+
+    def execute_build_pbb_order(self, order: BuildPBBOrder, current_player: Player) -> Tuple[bool, str]:
+        if not isinstance(order, BuildPBBOrder):
+            return False, "Invalid order type for BuildPBBOrder."
+
+        fleet = self.get_fleet(order.fleet_id)
+        if not fleet:
+            return False, f"Error: Fleet with ID {order.fleet_id} not found."
+        
+        if fleet.owner != current_player:
+            return False, f"Error: Player {current_player.name} does not own Fleet {fleet.name} (ID: {order.fleet_id})."
+
+        if fleet.ships < 25:
+            return False, f"Error: Fleet {fleet.name} (ID: {order.fleet_id}) has {fleet.ships} ships, but 25 are required to build a PBB."
+
+        if fleet.has_pbb:
+            return False, f"Error: Fleet {fleet.name} (ID: {order.fleet_id}) already has a PBB."
+
+        # Berserker specific cost
+        cost_metal = 50
+        cost_population = 0 # Not applicable directly from fleet, but implies world support or character ability
+        
+        if current_player.character_type == "Berserker":
+            # Check for a suitable world owned by the Berserker at the fleet's location
+            world_at_fleet_location = fleet.location
+            if not world_at_fleet_location or world_at_fleet_location.owner != current_player:
+                return False, f"Error: Berserker fleet {fleet.name} (ID: {order.fleet_id}) is not at an owned world to supply PBB materials."
+            
+            if world_at_fleet_location.stockpile < cost_metal:
+                return False, f"Error: World {world_at_fleet_location.name} (ID: {world_at_fleet_location.id}) has insufficient stockpile ({world_at_fleet_location.stockpile}) to build PBB (requires {cost_metal})."
+            
+            world_at_fleet_location.stockpile -= cost_metal
+            # Ships are still consumed as per general rule, unless Berserker rule explicitly states ships are NOT consumed
+            # The prompt says "fleet.ships -= 25" which is general. Berserker cost is additional (metal).
+        
+        fleet.ships -= 25
+        fleet.has_pbb = True
+        
+        message = f"PBB constructed on Fleet {fleet.name} (ID: {order.fleet_id})."
+        if current_player.character_type == "Berserker":
+            message += f" Cost: 25 ships and {cost_metal} metal from {world_at_fleet_location.name}."
+        else:
+            message += " Cost: 25 ships."
+            
+        self.add_turn_event(current_player.user_id, message)
+        return True, message
+
+    def execute_drop_pbb_order(self, order: DropPBBOrder, current_player: Player) -> Tuple[bool, str]:
+        if not isinstance(order, DropPBBOrder):
+            return False, "Invalid order type for DropPBBOrder."
+
+        fleet = self.get_fleet(order.fleet_id)
+        world = self.get_world(order.world_id)
+
+        if not fleet:
+            return False, f"Error: Fleet with ID {order.fleet_id} not found."
+        if not world:
+            return False, f"Error: World with ID {order.world_id} not found."
+        
+        if fleet.owner != current_player:
+            return False, f"Error: Player {current_player.name} does not own Fleet {fleet.name} (ID: {order.fleet_id})."
+        
+        if fleet.location != world:
+            return False, f"Error: Fleet {fleet.name} (ID: {order.fleet_id}) is not at World {world.name} (ID: {order.world_id})."
+
+        if not fleet.has_pbb:
+            return False, f"Error: Fleet {fleet.name} (ID: {order.fleet_id}) does not have a PBB to drop."
+
+        if world.is_destroyed_by_pbb: # Check this before is_black_hole as PBB'd worlds are not black holes but are marked
+            return False, f"Error: World {world.name} (ID: {order.world_id}) has already been destroyed by a PBB. Cannot score points again."
+
+        if world.is_black_hole: # Cannot PBB a black hole
+            return False, f"Error: Cannot drop PBB on a Black Hole (World {world.name} ID: {order.world_id})."
+
+        # PBB is consumed
+        fleet.has_pbb = False
+        
+        # Store pre-destruction population for VP calculation
+        pre_drop_population = world.population
+        pre_drop_converts = world.convert_units
+        # Robots are not counted for PBB VP based on the Berserker rule "normal or converted, but not robots"
+        # and the general PBB rule "200 points... plus 2 points for each population killed".
+        # Assuming "population killed" here means the same as for Berserker shooting.
+
+        # Destroy the world (except artifacts)
+        world.population = 0
+        world.convert_units = 0
+        world.converts_owner_id = None
+        world.robot_units = 0 # PBB destroys robots too
+        world.industry = 0
+        world.mines = 0
+        world.stockpile = 0
+        world.iships = 0
+        world.pships = 0
+        world.max_population = 0 # Population limit reduced to zero
+        world.is_destroyed_by_pbb = True # Mark as PBB'd
+        world.owner = None # World becomes unowned
+        world.turns_owned = 0
+        world.recovering_from_plunder_turns = 0 # PBB overrides plunder recovery
+        world.cg_unloads_count = 0 # Reset commercial activity
+
+        # Scoring
+        vp_change = 0
+        population_killed_for_vp = pre_drop_population + pre_drop_converts
+        
+        if current_player.character_type == "Berserker":
+            vp_change += 200  # VP for PBB drop
+            vp_change += population_killed_for_vp * 2 # VP for population killed
+            berserker_message = f"Berserker {current_player.name} gained 200 VP for PBB drop and {population_killed_for_vp * 2} VP for {population_killed_for_vp} population killed."
+            self.add_turn_event(current_player.user_id, berserker_message)
+        else:
+            # Non-Berserker (and not Apostle on Jihad - Jihad not handled here)
+            vp_change -= 50 # Penalty for PBB drop
+            vp_change -= population_killed_for_vp * 1 # Penalty for population killed
+            other_player_message = f"Player {current_player.name} lost 50 VP for PBB drop and {population_killed_for_vp * 1} VP for {population_killed_for_vp} population killed."
+            self.add_turn_event(current_player.user_id, other_player_message)
+            
+        if vp_change != 0:
+            self.turn_vp_adjustments[current_player.user_id] = self.turn_vp_adjustments.get(current_player.user_id, 0) + vp_change
+
+        event_message = f"World {world.name} (ID: {world.id}) destroyed by PBB dropped by Fleet {fleet.name} (ID: {order.fleet_id}). All population and structures obliterated. Artifacts remain."
+        # Notify all players? Or just involved ones? For now, just the current player gets the detailed scoring.
+        # A general announcement might be needed for all players if a world is destroyed.
+        # For now, the success message of the order itself will be the main info.
+        # If the world had an owner, notify them of the destruction.
+        if world.owner and world.owner != current_player : # world.owner is already set to None, so this check is tricky. Need original owner.
+             # This part needs careful thought on how to get original owner if it was already set to None.
+             # For now, we assume the event message is sufficient.
+             pass
+
+
+        return True, f"PBB successfully dropped on World {world.name} (ID: {world.id}). The world is now a desolate wasteland."
+
+    def execute_declare_jihad_order(self, order: DeclareJihadOrder, current_player: Player) -> Tuple[bool, str]:
+        if not isinstance(order, DeclareJihadOrder):
+            return False, "Invalid order type for DeclareJihadOrder."
+
+        if current_player.character_type != "Apostle":
+            return False, f"Error: Player {current_player.name} is not an Apostle and cannot declare Jihad."
+
+        target_player = self.get_player_by_user_id(order.target_player_id)
+        if not target_player:
+            return False, f"Error: Target player with ID {order.target_player_id} not found."
+
+        if order.target_player_id == current_player.user_id:
+            return False, "Error: Cannot declare Jihad against oneself."
+
+        # Check if already on Jihad against this target or another
+        if current_player.jihad_target_player_id:
+            if current_player.jihad_target_player_id == order.target_player_id:
+                return False, f"Error: Apostle {current_player.name} has already declared Jihad against {target_player.name}."
+            else:
+                # As per rules, declaring a new Jihad cancels the old one.
+                old_jihad_target = self.get_player_by_user_id(current_player.jihad_target_player_id)
+                old_jihad_target_name = old_jihad_target.name if old_jihad_target else "an unknown player"
+                self.add_turn_event(current_player.user_id, f"Your Jihad against {old_jihad_target_name} has been cancelled by declaring a new Jihad.")
+
+
+        current_player.jihad_target_player_id = order.target_player_id
+        
+        message = f"Apostle {current_player.name} has declared Jihad against {target_player.name}!"
+        self.add_turn_event(current_player.user_id, message)
+        # Also notify the target player
+        self.add_turn_event(target_player.user_id, f"Apostle {current_player.name} has declared Jihad against you!")
+        
+        return True, message
+
     def process_turn(self, user_id: str, raw_orders_list: List[Dict]) -> List[str]:
         self.turn_number += 1
         print(f"Processing Turn {self.turn_number} for user: {user_id}")
@@ -647,12 +950,21 @@ class Game:
             elif isinstance(order_obj, SetAllyOrder): success, message = self.execute_set_ally_order(order_obj, current_player)
             elif isinstance(order_obj, GiftWorldOrder): success, message = self.execute_gift_world_order(order_obj, current_player)
             elif isinstance(order_obj, GiftFleetOrder): success, message = self.execute_gift_fleet_order(order_obj, current_player)
+            elif isinstance(order_obj, PlunderOrder): success, message = self.execute_plunder_order(order_obj, current_player)
+            elif isinstance(order_obj, BuildPBBOrder): success, message = self.execute_build_pbb_order(order_obj, current_player)
+            elif isinstance(order_obj, DropPBBOrder): success, message = self.execute_drop_pbb_order(order_obj, current_player)
+            elif isinstance(order_obj, DeclareJihadOrder): success, message = self.execute_declare_jihad_order(order_obj, current_player)
+            elif isinstance(order_obj, ScrapISHPsForIndustryOrder): success, message = self.execute_scrap_ishps_for_industry_order(order_obj, current_player)
             else: message = f"Order type {type(order_obj).__name__} not recognized by process_turn."
             results_messages.append(f"Order ({order_obj.order_type} P{order_obj.priority}): {message} (Success: {success})")
 
         # Metal Production
         for world in self.worlds:
             if world.owner and not world.is_black_hole:
+                if world.recovering_from_plunder_turns > 0: # Plunder recovery effect
+                    if world.owner: # Check if world has an owner to notify
+                        self.add_turn_event(world.owner.user_id, f"World {world.name} did not produce metal due to plunder recovery ({world.recovering_from_plunder_turns} turns remaining).")
+                    continue
                 pop_for_mining = 0
                 if world.robot_units > 0 and world.population == 0 and world.convert_units == 0: pop_for_mining = world.robot_units
                 elif world.robot_units == 0 and world.convert_units == 0: pop_for_mining = world.population
@@ -669,6 +981,9 @@ class Game:
         # Population Growth (only for current player's worlds this turn for now)
         for world in self.worlds:
             if world.owner == current_player and not world.is_black_hole:
+                if world.recovering_from_plunder_turns > 0: # Plunder recovery effect
+                    self.add_turn_event(current_player.user_id, f"World {world.name} population did not grow due to plunder recovery ({world.recovering_from_plunder_turns} turns remaining).")
+                    continue
                 if world.robot_units > 0: continue # Robots don't grow
                 current_pop = world.population + world.convert_units
                 if current_pop >= world.max_population: continue
@@ -689,6 +1004,8 @@ class Game:
                         self.add_turn_event(user_id, f"{world.name} population grew by {actual_growth}.")
 
         self.resolve_world_and_key_capture()
+
+        self.resolve_pirate_captures() # Pirate fleet capture phase
 
         # Final VP Update for the current player
         base_vp = current_player.character.calculate_victory_points(self) # Pass game instance
@@ -743,6 +1060,10 @@ class Game:
         # Turns Owned & Mine Increase
         for world in self.worlds:
             if world.owner and not world.is_black_hole:
+                if world.recovering_from_plunder_turns > 0: # Plunder recovery effect
+                    if world.owner: # Check if world has an owner to notify
+                        self.add_turn_event(world.owner.user_id, f"World {world.name} turns owned counter did not increase (and no mine increase) due to plunder recovery ({world.recovering_from_plunder_turns} turns remaining).")
+                    continue # Skip turns_owned increment and potential mine increase
                 world.turns_owned += 1
                 if world.turns_owned % 8 == 0: # Increase every 8 turns of continuous ownership
                     if world.mines > 0 and world.mines < 30: # Max 30 mines
@@ -750,7 +1071,479 @@ class Game:
                         mine_msg = f"{world.name} (Owner: {world.owner.name}) increased mines to {world.mines}."
                         results_messages.append(mine_msg); print(mine_msg)
                         self.add_turn_event(world.owner.user_id, mine_msg)
+        
+        # Decrement Plunder Recovery Counters
+        for world in self.worlds:
+            if world.recovering_from_plunder_turns > 0:
+                world.recovering_from_plunder_turns -= 1
+                if world.recovering_from_plunder_turns == 0:
+                    if world.owner: # Notify owner if there is one
+                         self.add_turn_event(world.owner.user_id, f"World {world.name} has recovered from plundering.")
+                    print(f"World {world.name} (ID: {world.id}) has recovered from plundering.") # Server log
+
         return results_messages
+
+    def resolve_pirate_captures(self) -> List[str]:
+       results_messages: List[str] = [] 
+       print(f"Turn {self.turn_number}: Resolving Pirate fleet captures...")
+       
+       # Iterate through players to find Pirates
+       for pirate_player in self.players:
+           if pirate_player.character_type != "Pirate":
+               continue
+
+           # Pirates evaluate captures world by world
+           for world in self.worlds:
+               if world.is_black_hole:
+                   continue
+
+               pirate_fleets_at_world = [
+                   f for f in self.fleets 
+                   if f.owner == pirate_player and f.location == world and not f.is_at_peace and f.ships > 0
+               ]
+               if not pirate_fleets_at_world:
+                   continue
+
+               pirate_strength = sum(f.ships for f in pirate_fleets_at_world)
+               if pirate_strength == 0: 
+                   continue
+
+               other_players_strength = 0
+               fleets_to_potentially_capture: List[Fleet] = []
+
+               for other_fleet in self.fleets:
+                   if other_fleet.location == world and other_fleet.owner and other_fleet.owner != pirate_player and other_fleet.ships > 0:
+                       is_allied = False
+                       if other_fleet.owner.user_id in pirate_player.allies:
+                           is_allied = True
+                       
+                       if not is_allied:
+                           other_players_strength += other_fleet.ships
+                           fleets_to_potentially_capture.append(other_fleet)
+               
+               # Rule: "MORE THAN THREE TO ONE"
+               if pirate_strength > (other_players_strength * 3):
+                   if not fleets_to_potentially_capture: 
+                       continue
+
+                   capture_event_msg_for_pirate = f"At {world.name} (W{world.id}), your strength {pirate_strength} overwhelmed enemy strength {other_players_strength}. Captured fleets: "
+                   captured_fleet_names = []
+
+                   for enemy_fleet in fleets_to_potentially_capture: 
+                       original_owner = enemy_fleet.owner
+                       original_owner_name = original_owner.name if original_owner else "Unowned" 
+                       
+                       # Transfer ownership
+                       enemy_fleet.owner = pirate_player
+                       if enemy_fleet not in pirate_player.fleets:
+                           pirate_player.fleets.append(enemy_fleet)
+                       if original_owner and enemy_fleet in original_owner.fleets:
+                           original_owner.fleets.remove(enemy_fleet)
+                       
+                       enemy_fleet.cargo = 0 # Plunder cargo
+                       # Artifacts remain on the fleet key.
+                       
+                       capture_msg = (f"Pirate {pirate_player.name} captured Fleet {enemy_fleet.name} (F{enemy_fleet.id}) "
+                                      f"from {original_owner_name} at {world.name} (W{world.id}) by overwhelming odds.")
+                       results_messages.append(capture_msg)
+                       print(capture_msg)
+                       
+                       captured_fleet_names.append(f"{enemy_fleet.name}(F{enemy_fleet.id}) from {original_owner_name}")
+
+                       if original_owner:
+                           self.add_turn_event(original_owner.user_id, 
+                                               f"Your fleet {enemy_fleet.name} (F{enemy_fleet.id}) at {world.name} "
+                                               f"was captured by Pirate {pirate_player.name} due to overwhelming odds!")
+                   
+                   if captured_fleet_names:
+                       self.add_turn_event(pirate_player.user_id, capture_event_msg_for_pirate + ", ".join(captured_fleet_names) + ".")
+       
+       return results_messages
+
+def connect_all_worlds(worlds: List[World], min_connections_per_world: int = 1, avg_connections_per_world: int = 3):
+    if not worlds: return
+    num_worlds = len(worlds)
+       
+       # Iterate through players to find Pirates
+       for pirate_player in self.players:
+           if pirate_player.character_type != "Pirate":
+               continue
+
+           # Pirates evaluate captures world by world
+           for world in self.worlds:
+               if world.is_black_hole:
+                   continue
+
+               pirate_fleets_at_world = [
+                   f for f in self.fleets 
+                   if f.owner == pirate_player and f.location == world and not f.is_at_peace and f.ships > 0
+               ]
+               if not pirate_fleets_at_world:
+                   continue
+
+               pirate_strength = sum(f.ships for f in pirate_fleets_at_world)
+               if pirate_strength == 0: 
+                   continue
+
+               other_players_strength = 0
+               fleets_to_potentially_capture: List[Fleet] = []
+
+               for other_fleet in self.fleets:
+                   if other_fleet.location == world and other_fleet.owner and other_fleet.owner != pirate_player and other_fleet.ships > 0:
+                       is_allied = False
+                       if other_fleet.owner.user_id in pirate_player.allies:
+                           is_allied = True
+                       
+                       if not is_allied:
+                           other_players_strength += other_fleet.ships
+                           fleets_to_potentially_capture.append(other_fleet)
+               
+               # Rule: "MORE THAN THREE TO ONE"
+               if pirate_strength > (other_players_strength * 3):
+                   if not fleets_to_potentially_capture: 
+                       continue
+
+                   capture_event_msg_for_pirate = f"At {world.name} (W{world.id}), your strength {pirate_strength} overwhelmed enemy strength {other_players_strength}. Captured fleets: "
+                   captured_fleet_names = []
+
+                   for enemy_fleet in fleets_to_potentially_capture: 
+                       original_owner = enemy_fleet.owner
+                       original_owner_name = original_owner.name if original_owner else "Unowned" 
+                       
+                       # Transfer ownership
+                       enemy_fleet.owner = pirate_player
+                       if enemy_fleet not in pirate_player.fleets:
+                           pirate_player.fleets.append(enemy_fleet)
+                       if original_owner and enemy_fleet in original_owner.fleets:
+                           original_owner.fleets.remove(enemy_fleet)
+                       
+                       enemy_fleet.cargo = 0 # Plunder cargo
+                       # Artifacts remain on the fleet key.
+                       
+                       capture_msg = (f"Pirate {pirate_player.name} captured Fleet {enemy_fleet.name} (F{enemy_fleet.id}) "
+                                      f"from {original_owner_name} at {world.name} (W{world.id}) by overwhelming odds.")
+                       results_messages.append(capture_msg)
+                       print(capture_msg)
+                       
+                       captured_fleet_names.append(f"{enemy_fleet.name}(F{enemy_fleet.id}) from {original_owner_name}")
+
+                       if original_owner:
+                           self.add_turn_event(original_owner.user_id, 
+                                               f"Your fleet {enemy_fleet.name} (F{enemy_fleet.id}) at {world.name} "
+                                               f"was captured by Pirate {pirate_player.name} due to overwhelming odds!")
+                   
+                   if captured_fleet_names:
+                       self.add_turn_event(pirate_player.user_id, capture_event_msg_for_pirate + ", ".join(captured_fleet_names) + ".")
+       
+       return results_messages
+
+def connect_all_worlds(worlds: List[World], min_connections_per_world: int = 1, avg_connections_per_world: int = 3):
+    if not worlds: return
+    num_worlds = len(worlds)
+       
+       # Iterate through players to find Pirates
+       for pirate_player in self.players:
+           if pirate_player.character_type != "Pirate":
+               continue
+
+           # Pirates evaluate captures world by world
+           for world in self.worlds:
+               if world.is_black_hole:
+                   continue
+
+               pirate_fleets_at_world = [
+                   f for f in self.fleets 
+                   if f.owner == pirate_player and f.location == world and not f.is_at_peace and f.ships > 0
+               ]
+               if not pirate_fleets_at_world:
+                   continue
+
+               pirate_strength = sum(f.ships for f in pirate_fleets_at_world)
+               if pirate_strength == 0: 
+                   continue
+
+               other_players_strength = 0
+               fleets_to_potentially_capture: List[Fleet] = []
+
+               for other_fleet in self.fleets:
+                   if other_fleet.location == world and other_fleet.owner and other_fleet.owner != pirate_player and other_fleet.ships > 0:
+                       is_allied = False
+                       if other_fleet.owner.user_id in pirate_player.allies:
+                           is_allied = True
+                       
+                       if not is_allied:
+                           other_players_strength += other_fleet.ships
+                           fleets_to_potentially_capture.append(other_fleet)
+               
+               # Rule: "MORE THAN THREE TO ONE"
+               if pirate_strength > (other_players_strength * 3):
+                   if not fleets_to_potentially_capture: 
+                       continue
+
+                   capture_event_msg_for_pirate = f"At {world.name} (W{world.id}), your strength {pirate_strength} overwhelmed enemy strength {other_players_strength}. Captured fleets: "
+                   captured_fleet_names = []
+
+                   for enemy_fleet in fleets_to_potentially_capture: 
+                       original_owner = enemy_fleet.owner
+                       original_owner_name = original_owner.name if original_owner else "Unowned" 
+                       
+                       # Transfer ownership
+                       enemy_fleet.owner = pirate_player
+                       if enemy_fleet not in pirate_player.fleets:
+                           pirate_player.fleets.append(enemy_fleet)
+                       if original_owner and enemy_fleet in original_owner.fleets:
+                           original_owner.fleets.remove(enemy_fleet)
+                       
+                       enemy_fleet.cargo = 0 # Plunder cargo
+                       # Artifacts remain on the fleet key.
+                       
+                       capture_msg = (f"Pirate {pirate_player.name} captured Fleet {enemy_fleet.name} (F{enemy_fleet.id}) "
+                                      f"from {original_owner_name} at {world.name} (W{world.id}) by overwhelming odds.")
+                       results_messages.append(capture_msg)
+                       print(capture_msg)
+                       
+                       captured_fleet_names.append(f"{enemy_fleet.name}(F{enemy_fleet.id}) from {original_owner_name}")
+
+                       if original_owner:
+                           self.add_turn_event(original_owner.user_id, 
+                                               f"Your fleet {enemy_fleet.name} (F{enemy_fleet.id}) at {world.name} "
+                                               f"was captured by Pirate {pirate_player.name} due to overwhelming odds!")
+                   
+                   if captured_fleet_names:
+                       self.add_turn_event(pirate_player.user_id, capture_event_msg_for_pirate + ", ".join(captured_fleet_names) + ".")
+       
+       return results_messages
+
+def connect_all_worlds(worlds: List[World], min_connections_per_world: int = 1, avg_connections_per_world: int = 3):
+    if not worlds: return
+    num_worlds = len(worlds)
+       
+       # Iterate through players to find Pirates
+       for pirate_player in self.players:
+           if pirate_player.character_type != "Pirate":
+               continue
+
+           # Pirates evaluate captures world by world
+           for world in self.worlds:
+               if world.is_black_hole:
+                   continue
+
+               pirate_fleets_at_world = [
+                   f for f in self.fleets 
+                   if f.owner == pirate_player and f.location == world and not f.is_at_peace and f.ships > 0
+               ]
+               if not pirate_fleets_at_world:
+                   continue
+
+               pirate_strength = sum(f.ships for f in pirate_fleets_at_world)
+               if pirate_strength == 0: 
+                   continue
+
+               other_players_strength = 0
+               fleets_to_potentially_capture: List[Fleet] = []
+
+               for other_fleet in self.fleets:
+                   if other_fleet.location == world and other_fleet.owner and other_fleet.owner != pirate_player and other_fleet.ships > 0:
+                       is_allied = False
+                       if other_fleet.owner.user_id in pirate_player.allies:
+                           is_allied = True
+                       
+                       if not is_allied:
+                           other_players_strength += other_fleet.ships
+                           fleets_to_potentially_capture.append(other_fleet)
+               
+               # Rule: "MORE THAN THREE TO ONE"
+               if pirate_strength > (other_players_strength * 3):
+                   if not fleets_to_potentially_capture: 
+                       continue
+
+                   capture_event_msg_for_pirate = f"At {world.name} (W{world.id}), your strength {pirate_strength} overwhelmed enemy strength {other_players_strength}. Captured fleets: "
+                   captured_fleet_names = []
+
+                   for enemy_fleet in fleets_to_potentially_capture: 
+                       original_owner = enemy_fleet.owner
+                       original_owner_name = original_owner.name if original_owner else "Unowned" 
+                       
+                       # Transfer ownership
+                       enemy_fleet.owner = pirate_player
+                       if enemy_fleet not in pirate_player.fleets:
+                           pirate_player.fleets.append(enemy_fleet)
+                       if original_owner and enemy_fleet in original_owner.fleets:
+                           original_owner.fleets.remove(enemy_fleet)
+                       
+                       enemy_fleet.cargo = 0 # Plunder cargo
+                       # Artifacts remain on the fleet key.
+                       
+                       capture_msg = (f"Pirate {pirate_player.name} captured Fleet {enemy_fleet.name} (F{enemy_fleet.id}) "
+                                      f"from {original_owner_name} at {world.name} (W{world.id}) by overwhelming odds.")
+                       results_messages.append(capture_msg)
+                       print(capture_msg)
+                       
+                       captured_fleet_names.append(f"{enemy_fleet.name}(F{enemy_fleet.id}) from {original_owner_name}")
+
+                       if original_owner:
+                           self.add_turn_event(original_owner.user_id, 
+                                               f"Your fleet {enemy_fleet.name} (F{enemy_fleet.id}) at {world.name} "
+                                               f"was captured by Pirate {pirate_player.name} due to overwhelming odds!")
+                   
+                   if captured_fleet_names:
+                       self.add_turn_event(pirate_player.user_id, capture_event_msg_for_pirate + ", ".join(captured_fleet_names) + ".")
+       
+       return results_messages
+
+def connect_all_worlds(worlds: List[World], min_connections_per_world: int = 1, avg_connections_per_world: int = 3):
+    if not worlds: return
+    num_worlds = len(worlds)
+       
+       # Iterate through players to find Pirates
+       for pirate_player in self.players:
+           if pirate_player.character_type != "Pirate":
+               continue
+
+           # Pirates evaluate captures world by world
+           for world in self.worlds:
+               if world.is_black_hole:
+                   continue
+
+               pirate_fleets_at_world = [
+                   f for f in self.fleets 
+                   if f.owner == pirate_player and f.location == world and not f.is_at_peace and f.ships > 0
+               ]
+               if not pirate_fleets_at_world:
+                   continue
+
+               pirate_strength = sum(f.ships for f in pirate_fleets_at_world)
+               if pirate_strength == 0: # Should be covered by f.ships > 0 but good for safety
+                   continue
+
+               other_players_strength = 0
+               fleets_to_potentially_capture: List[Fleet] = []
+
+               for other_fleet in self.fleets:
+                   if other_fleet.location == world and other_fleet.owner and other_fleet.owner != pirate_player and other_fleet.ships > 0:
+                       # Check if other_fleet's owner is an ally of the pirate_player
+                       is_allied = False
+                       if other_fleet.owner.user_id in pirate_player.allies:
+                           is_allied = True
+                       
+                       if not is_allied:
+                           other_players_strength += other_fleet.ships
+                           fleets_to_potentially_capture.append(other_fleet)
+               
+               # Rule: "MORE THAN THREE TO ONE"
+               if pirate_strength > (other_players_strength * 3):
+                   if not fleets_to_potentially_capture: # No non-allied enemy fleets present
+                       continue
+
+                   capture_event_msg_for_pirate = f"At {world.name} (W{world.id}), your strength {pirate_strength} overwhelmed enemy strength {other_players_strength}. Captured fleets: "
+                   captured_fleet_names = []
+
+                   for enemy_fleet in fleets_to_potentially_capture: # These are already filtered for non-allied
+                       original_owner = enemy_fleet.owner
+                       original_owner_name = original_owner.name if original_owner else "Unowned" # Should always have owner here
+                       
+                       # Transfer ownership
+                       enemy_fleet.owner = pirate_player
+                       if enemy_fleet not in pirate_player.fleets:
+                           pirate_player.fleets.append(enemy_fleet)
+                       if original_owner and enemy_fleet in original_owner.fleets:
+                           original_owner.fleets.remove(enemy_fleet)
+                       
+                       enemy_fleet.cargo = 0 # Plunder cargo
+                       # Artifacts remain on the fleet key.
+                       
+                       capture_msg = (f"Pirate {pirate_player.name} captured Fleet {enemy_fleet.name} (F{enemy_fleet.id}) "
+                                      f"from {original_owner_name} at {world.name} (W{world.id}) by overwhelming odds.")
+                       results_messages.append(capture_msg)
+                       print(capture_msg)
+                       
+                       captured_fleet_names.append(f"{enemy_fleet.name}(F{enemy_fleet.id}) from {original_owner_name}")
+
+                       # Add turn event for the original owner
+                       if original_owner:
+                           self.add_turn_event(original_owner.user_id, 
+                                               f"Your fleet {enemy_fleet.name} (F{enemy_fleet.id}) at {world.name} "
+                                               f"was captured by Pirate {pirate_player.name} due to overwhelming odds!")
+                   
+                   if captured_fleet_names:
+                       self.add_turn_event(pirate_player.user_id, capture_event_msg_for_pirate + ", ".join(captured_fleet_names) + ".")
+       
+       return results_messages
+
+def connect_all_worlds(worlds: List[World], min_connections_per_world: int = 1, avg_connections_per_world: int = 3):
+    if not worlds: return
+    num_worlds = len(worlds)
+
+        pirate_players = [p for p in self.players if p.character_type == "Pirate"]
+
+        for pirate_player in pirate_players:
+            for world in self.worlds:
+                if world.is_black_hole:
+                    continue
+
+                pirate_fleets_at_world = [f for f in pirate_player.fleets if f.location == world and not f.is_at_peace]
+                if not pirate_fleets_at_world:
+                    continue
+
+                pirate_strength = sum(f.ships for f in pirate_fleets_at_world)
+                if pirate_strength == 0: # No ships to enforce capture
+                    continue
+
+                other_players_strength = 0
+                fleets_to_potentially_capture: List[Fleet] = []
+
+                for other_fleet in self.fleets:
+                    if other_fleet.location == world and other_fleet.owner and other_fleet.owner != pirate_player:
+                        # Check if other_fleet owner is an ally of the pirate_player
+                        is_allied = False
+                        if other_fleet.owner.user_id in pirate_player.allies:
+                            is_allied = True
+                        
+                        if not is_allied:
+                            other_players_strength += other_fleet.ships
+                            fleets_to_potentially_capture.append(other_fleet)
+                
+                if pirate_strength > (other_players_strength * 3):
+                    if not fleets_to_potentially_capture: # No non-allied fleets to capture
+                        continue
+                        
+                    capture_summary_msg = f"Pirate {pirate_player.name} (Strength: {pirate_strength}) overwhelmingly outnumbers others (Strength: {other_players_strength}) at World {world.name} (ID: {world.id})."
+                    print(capture_summary_msg) # Server log
+                    self.add_turn_event(pirate_player.user_id, capture_summary_msg)
+                    results_messages.append(capture_summary_msg)
+
+                    for captured_fleet in fleets_to_potentially_capture:
+                        original_owner = captured_fleet.owner
+                        
+                        if original_owner: # Should always be true based on loop condition
+                            if captured_fleet in original_owner.fleets:
+                                original_owner.fleets.remove(captured_fleet)
+                        
+                        captured_fleet.owner = pirate_player
+                        if captured_fleet not in pirate_player.fleets:
+                            pirate_player.fleets.append(captured_fleet)
+                        
+                        # Cargo is lost upon capture by Pirate
+                        captured_fleet.cargo = 0
+                        # Artifacts on captured fleet are transferred to the Pirate's homeworld, or a random owned world if no homeworld
+                        # Or they could stay on the fleet, rules are ambiguous. Let's assume they stay on fleet for now.
+                        # If they were to be moved:
+                        # target_world_for_artifacts = pirate_player.home_world
+                        # if not target_world_for_artifacts and pirate_player.worlds:
+                        #    target_world_for_artifacts = random.choice(pirate_player.worlds)
+                        # if target_world_for_artifacts and not target_world_for_artifacts.is_black_hole:
+                        #    target_world_for_artifacts.artifacts.extend(captured_fleet.artifacts)
+                        #    captured_fleet.artifacts = []
+
+
+                        capture_msg = f"Fleet {captured_fleet.name} (ID: {captured_fleet.id}, {captured_fleet.ships} ships) captured by Pirate {pirate_player.name} at World {world.name}!"
+                        results_messages.append(capture_msg); print(capture_msg)
+                        self.add_turn_event(pirate_player.user_id, f"You captured Fleet {captured_fleet.name} (ID: {captured_fleet.id}) at {world.name}!")
+                        if original_owner:
+                            self.add_turn_event(original_owner.user_id, f"Your Fleet {captured_fleet.name} (ID: {captured_fleet.id}) at {world.name} was captured by Pirate {pirate_player.name}!")
+        
+        return results_messages
+
 
 def connect_all_worlds(worlds: List[World], min_connections_per_world: int = 1, avg_connections_per_world: int = 3):
     if not worlds: return
@@ -820,6 +1613,20 @@ def order_from_dict(order_dict: Dict, player_id_for_original_orders: Optional[st
         elif order_type == "FIRE":
             if 'is_conditional' in data: data['is_conditional'] = bool(data['is_conditional'])
             return FireOrder(**data)
+        elif order_type == "PLUNDER":
+            return PlunderOrder(**data)
+        elif order_type == "BUILD_PBB":
+            return BuildPBBOrder(**data)
+        elif order_type == "DROP_PBB":
+            return DropPBBOrder(**data)
+        elif order_type == "DECLARE_JIHAD":
+            return DeclareJihadOrder(**data)
+        elif order_type == "SCRAP_ISHPS_FOR_INDUSTRY":
+            data['quantity'] = int(data['quantity'])
+            return ScrapISHPsForIndustryOrder(**data)
+        elif order_type == "ROBOT_ATTACK":
+            data['num_ships_to_convert'] = int(data['num_ships_to_convert'])
+            return RobotAttackOrder(**data)
         
         # Original orders (subclassing OrderWithPlayerId)
         # These need player_id, passed as player_id_for_original_orders
@@ -874,7 +1681,8 @@ def create_game() -> Game:
         world = World(id=i, name=f"World {i}", owner=None, connections=[], iships=0, pships=0,
                       population=random.randint(0,20), max_population=random.randint(50,150),
                       industry=random.randint(0,5), mines=random.randint(0,3), stockpile=random.randint(0,50),
-                      artifacts=[], robot_units=0, convert_units=0, converts_owner_id=None)
+                      artifacts=[], robot_units=0, convert_units=0, converts_owner_id=None,
+                      times_plundered_this_game=0, recovering_from_plunder_turns=0) # Added plunder fields
         new_game.worlds.append(world)
     
     connect_all_worlds(new_game.worlds)
@@ -897,6 +1705,9 @@ def create_game() -> Game:
             world_obj.industry = 0; world_obj.mines = 0; world_obj.stockpile = 0
             world_obj.iships = 0; world_obj.pships = 0; world_obj.artifacts = []
             world_obj.robot_units = 0; world_obj.convert_units = 0; world_obj.converts_owner_id = None
+            world_obj.times_plundered_this_game = 0 # Reset for black holes
+            world_obj.recovering_from_plunder_turns = 0 # Reset for black holes
+            world_obj.is_destroyed_by_pbb = False # Explicitly reset for black holes
             world_obj.name = f"Black Hole W{world_obj.id}"
             # Consider clearing connections for black holes if they shouldn't be part of network
             # world_obj.connections = [] 

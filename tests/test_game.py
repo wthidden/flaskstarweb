@@ -2495,6 +2495,490 @@ class TestGameCommands(unittest.TestCase):
         # Test that "Plastic Crown" (preferred category, but plastic) gives -10 VP.
         # This is already covered in the main calculation.
 
+# --- Tests for UI Data Preparation (main.py) ---
+from unittest.mock import patch, MagicMock
+
+class TestUIDataPreparation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        app.config['LOGIN_DISABLED'] = False 
+        # app.secret_key is set in main app.py
+
+    def setUp(self):
+        self.client = app.test_client()
+        # Clear users_db for each test to ensure isolation for login tests
+        users_db.clear()
+
+    @patch('starweb_app.main.render_template')
+    @patch('starweb_app.main.get_or_create_game')
+    @patch('starweb_app.main.current_user', new_callable=MagicMock)
+    def test_display_game_with_player_data(self, mock_current_user, mock_get_game, mock_render_template):
+        # 1. Setup Mock User
+        mock_user = User(username="testplayer", password="password")
+        mock_user.id = "testplayer" # Flask-Login uses id
+        mock_current_user.is_authenticated = True
+        mock_current_user.id = "testplayer"
+        users_db["testplayer"] = mock_user # Add to our mock db for load_user
+
+        # 2. Setup Mock Game and Player
+        mock_game_instance = MagicMock(spec=Game)
+        mock_player_ingame = MagicMock(spec=Player)
+        
+        mock_world1 = MagicMock(spec=World)
+        mock_world1.id = 101
+        mock_world1.name = "PlayerHome"
+        mock_player_ingame.worlds = [mock_world1]
+        
+        mock_fleet1 = MagicMock(spec=Fleet)
+        mock_fleet1.id = 201
+        mock_fleet1.name = "PlayerFleet1"
+        mock_player_ingame.fleets = [mock_fleet1]
+        
+        mock_game_instance.get_player_by_user_id.return_value = mock_player_ingame
+        mock_game_instance.get_and_clear_turn_events.return_value = ["A test event."] # Avoid error if this is called
+        
+        # Mock methods called by get_visible_worlds/fleets if they were to be called by non-admin
+        # For this test, current_player_ingame is directly used if not admin, so these are not strictly needed
+        # but good for robustness if logic changes.
+        mock_game_instance.get_visible_worlds_for_player.return_value = [mock_world1]
+        mock_game_instance.get_visible_fleets_for_player.return_value = [mock_fleet1]
+
+        mock_get_game.return_value = mock_game_instance
+        
+        # 3. Call the route (simulating login)
+        with self.client:
+            # Login the user (if your tests need session handling beyond mocking current_user)
+            # For this specific test, directly mocking current_user is often enough.
+            # If the route itself checks session login more deeply:
+            # self.client.post('/login', data=dict(username='testplayer', password='password'), follow_redirects=True)
+            
+            response = self.client.get('/game')
+
+        # 4. Assertions
+        self.assertEqual(response.status_code, 200)
+        mock_render_template.assert_called_once()
+        
+        # Get the arguments passed to render_template
+        _, kwargs = mock_render_template.call_args
+        
+        self.assertIn('player_owned_worlds', kwargs)
+        self.assertIn('player_owned_fleets', kwargs)
+        self.assertEqual(len(kwargs['player_owned_worlds']), 1)
+        self.assertEqual(kwargs['player_owned_worlds'][0], mock_world1)
+        self.assertEqual(len(kwargs['player_owned_fleets']), 1)
+        self.assertEqual(kwargs['player_owned_fleets'][0], mock_fleet1)
+        self.assertEqual(kwargs['current_player_ingame'], mock_player_ingame)
+        self.assertFalse(kwargs['is_admin_view'])
+
+    @patch('starweb_app.main.render_template')
+    @patch('starweb_app.main.get_or_create_game')
+    @patch('starweb_app.main.current_user', new_callable=MagicMock)
+    def test_display_game_anonymous_user(self, mock_current_user, mock_get_game, mock_render_template):
+        # 1. Setup Mock User (Anonymous)
+        mock_current_user.is_authenticated = False
+        mock_current_user.is_admin = False # Ensure admin is false
+
+        # 2. Setup Mock Game (player will not be found)
+        mock_game_instance = MagicMock(spec=Game)
+        mock_game_instance.get_player_by_user_id.return_value = None
+        mock_game_instance.get_and_clear_turn_events.return_value = []
+        mock_get_game.return_value = mock_game_instance
+        
+        # 3. Call the route
+        response = self.client.get('/game') # Flask-Login will redirect to login if @login_required and not logged in
+                                            # However, if @login_required is not present or LOGIN_DISABLED is True for tests,
+                                            # it might proceed. Assuming login_manager.login_view is hit by @login_required
+                                            # For this test, we are checking the context if it *were* to render.
+                                            # The route is @login_required. If we simply mock current_user.is_authenticated = False
+                                            # Flask-Login will redirect. To test the context for an *unfound* player but authenticated,
+                                            # we'd need current_user.is_authenticated = True but get_player_by_user_id returns None.
+                                            # The current test name implies anonymous, so redirect is expected.
+                                            # Let's adapt to test context when user is authenticated but not in game.
+
+        # Let's test the case where user IS authenticated but NOT an in-game player
+        mock_current_user.is_authenticated = True
+        mock_current_user.id = "ghostplayer" # Authenticated, but not in game.players
+        users_db["ghostplayer"] = User("ghostplayer", "pwd") # So load_user works
+
+        response = self.client.get('/game')
+        self.assertEqual(response.status_code, 200) # Should still render the page with limited view
+        mock_render_template.assert_called_once()
+        _, kwargs = mock_render_template.call_args
+        
+        self.assertEqual(kwargs['player_owned_worlds'], [])
+        self.assertEqual(kwargs['player_owned_fleets'], [])
+        self.assertIsNone(kwargs['current_player_ingame'])
+        self.assertFalse(kwargs['is_admin_view'])
+        # flash message "Logged in, but not an active player..." should be added. Harder to test flash directly here.
+
+    @patch('starweb_app.main.render_template')
+    @patch('starweb_app.main.get_or_create_game')
+    @patch('starweb_app.main.current_user', new_callable=MagicMock)
+    def test_display_game_admin_user(self, mock_current_user, mock_get_game, mock_render_template):
+        # 1. Setup Mock User (Admin)
+        mock_admin_user = User(username="admin", password="password", is_admin=True)
+        mock_admin_user.id = "admin"
+        mock_current_user.is_authenticated = True
+        mock_current_user.id = "admin"
+        mock_current_user.is_admin = True # Key for admin view
+        users_db["admin"] = mock_admin_user
+
+        # 2. Setup Mock Game
+        mock_game_instance = MagicMock(spec=Game)
+        mock_world_admin_can_see = MagicMock(spec=World)
+        mock_fleet_admin_can_see = MagicMock(spec=Fleet)
+        mock_game_instance.worlds = [mock_world_admin_can_see] * 5 # Admin sees all
+        mock_game_instance.fleets = [mock_fleet_admin_can_see] * 3
+        mock_game_instance.get_player_by_user_id.return_value = None # Admin might not be a 'player'
+        mock_game_instance.get_and_clear_turn_events.return_value = []
+        mock_get_game.return_value = mock_game_instance
+
+        # 3. Call the route
+        response = self.client.get('/game')
+
+        # 4. Assertions
+        self.assertEqual(response.status_code, 200)
+        mock_render_template.assert_called_once()
+        _, kwargs = mock_render_template.call_args
+        
+        self.assertEqual(kwargs['worlds_to_display'], mock_game_instance.worlds)
+        self.assertEqual(kwargs['fleets_to_display'], mock_game_instance.fleets)
+        self.assertTrue(kwargs['is_admin_view'])
+        # player_owned_worlds/fleets should be empty if admin is not also an in-game player
+        self.assertEqual(kwargs['player_owned_worlds'], []) 
+        self.assertEqual(kwargs['player_owned_fleets'], [])
+
+# --- Tests for Corrected Artifact Scoring (models.py) ---
+class TestArtifactScoring(unittest.TestCase):
+    def setUp(self):
+        self.game = Game(worlds=[], fleets=[], players=[]) # Minimal game instance
+        # Ensure ALL_ARTIFACTS is populated for get_artifact_by_id
+        if not ALL_ARTIFACTS:
+            # This is a bit of a hack for tests; ideally, ALL_ARTIFACTS is initialized once globally.
+            # If models.py is structured to create them on import, this might not be needed.
+            # For safety, ensure they are created if the list is empty.
+            from starweb_app.models import STANDARD_ARTIFACT_FIRST_WORDS, STANDARD_ARTIFACT_SECOND_WORDS, SPECIAL_ARTIFACT_NAMES_AND_POINTS
+            artifact_id_counter = 1
+            for first_word in STANDARD_ARTIFACT_FIRST_WORDS:
+                for second_word in STANDARD_ARTIFACT_SECOND_WORDS:
+                    if artifact_id_counter > 90: break
+                    artifact_name = f"{first_word} {second_word}"
+                    is_plastic = (first_word.lower() == "plastic")
+                    points = -10 if is_plastic else 5
+                    ALL_ARTIFACTS.append(Artifact(id=f"V{artifact_id_counter}", name=artifact_name, points=points, is_plastic=is_plastic, category="Standard"))
+                    artifact_id_counter += 1
+                if artifact_id_counter > 90: break
+            for name, points in SPECIAL_ARTIFACT_NAMES_AND_POINTS.items():
+                if artifact_id_counter > 100: break
+                ALL_ARTIFACTS.append(Artifact(id=f"V{artifact_id_counter}", name=name, points=points, category="Special"))
+                artifact_id_counter += 1
+
+
+    def _create_player_with_artifact(self, character_type: str, artifact_name: str, player_name: str = "TestPlayer") -> Player:
+        player = Player(name=player_name, character_type=character_type, user_id=f"{player_name}_user")
+        self.game.players.append(player)
+        world = World(id=1, name=f"{player_name}_W1", owner=player, connections=[], iships=0, pships=0, population=0, max_population=100, industry=0, mines=0, stockpile=0)
+        player.worlds = [world]
+        self.game.worlds = [world]
+        
+        # Find the artifact by name (case-sensitive)
+        artifact_to_add = next((art for art in ALL_ARTIFACTS if art.name == artifact_name), None)
+        if not artifact_to_add:
+            self.fail(f"Artifact '{artifact_name}' not found in ALL_ARTIFACTS for test setup.")
+        world.artifacts.append(artifact_to_add)
+        return player
+
+    def test_berserker_artifact_scoring(self):
+        # Base VP for Berserker is 0 from worlds/fleets in this minimal setup
+        
+        # 1. Titanium Sword (Greatest Treasure)
+        player_b1 = self._create_player_with_artifact("Berserker", "Titanium Sword", "Bersk1")
+        vp1 = player_b1.character.calculate_victory_points(self.game)
+        self.assertEqual(vp1, 15, "Titanium Sword should give +15 VP for Berserker.")
+
+        # 2. Titanium Lodestar (Preferred "Titanium")
+        player_b2 = self._create_player_with_artifact("Berserker", "Titanium Lodestar", "Bersk2")
+        vp2 = player_b2.character.calculate_victory_points(self.game)
+        self.assertEqual(vp2, 5, "Titanium Lodestar should give +5 VP for Berserker.")
+
+        # 3. Silver Sword (Preferred "Sword")
+        player_b3 = self._create_player_with_artifact("Berserker", "Silver Sword", "Bersk3")
+        vp3 = player_b3.character.calculate_victory_points(self.game)
+        self.assertEqual(vp3, 5, "Silver Sword should give +5 VP for Berserker.")
+
+        # 4. Titanium Sphinx (Preferred "Titanium", but "Sphinx" is not preferred for Berserker)
+        player_b4 = self._create_player_with_artifact("Berserker", "Titanium Sphinx", "Bersk4")
+        vp4 = player_b4.character.calculate_victory_points(self.game)
+        self.assertEqual(vp4, 5, "Titanium Sphinx should give +5 VP (for Titanium), not +15 or extra for Sphinx.")
+        
+        # 5. Vegan Moonstone (Standard, non-preferred, non-plastic)
+        player_b5 = self._create_player_with_artifact("Berserker", "Vegan Moonstone", "Bersk5")
+        vp5 = player_b5.character.calculate_victory_points(self.game)
+        self.assertEqual(vp5, 0, "Vegan Moonstone should give 0 VP for Berserker (base artifact points not counted for Berserker unless special).")
+
+        # 6. Plastic Sword (Plastic, preferred "Sword")
+        player_b6 = self._create_player_with_artifact("Berserker", "Plastic Sword", "Bersk6")
+        vp6 = player_b6.character.calculate_victory_points(self.game)
+        self.assertEqual(vp6, -10, "Plastic Sword should give -10 VP for Berserker.")
+        
+        # 7. Treasure of Polaris (Special)
+        player_b7 = self._create_player_with_artifact("Berserker", "Treasure of Polaris", "Bersk7")
+        vp7 = player_b7.character.calculate_victory_points(self.game)
+        self.assertEqual(vp7, 20, "Treasure of Polaris should give +20 VP for Berserker.")
+
+
+    def test_apostle_artifact_scoring(self):
+        # Base VP for Apostle is from owned worlds (5 per) + converts.
+        # For simplicity, test artifact VPs in isolation by assuming 0 base from worlds/converts initially.
+        
+        # 1. Blessed Sepulchre (Greatest Treasure)
+        player_a1 = self._create_player_with_artifact("Apostle", "Blessed Sepulchre", "Apost1")
+        # Base for 1 world = 5VP. Artifact +15. Total = 20
+        vp1 = player_a1.character.calculate_victory_points(self.game)
+        self.assertEqual(vp1, 5 + 15, "Blessed Sepulchre should give +15 VP for Apostle.")
+
+        # 2. Blessed Lodestar (Preferred "Blessed")
+        player_a2 = self._create_player_with_artifact("Apostle", "Blessed Lodestar", "Apost2")
+        vp2 = player_a2.character.calculate_victory_points(self.game)
+        self.assertEqual(vp2, 5 + 5, "Blessed Lodestar should give +5 VP for Apostle.")
+
+        # 3. Ancient Sepulchre (Preferred "Sepulchre")
+        player_a3 = self._create_player_with_artifact("Apostle", "Ancient Sepulchre", "Apost3")
+        vp3 = player_a3.character.calculate_victory_points(self.game)
+        self.assertEqual(vp3, 5 + 5, "Ancient Sepulchre should give +5 VP for Apostle.")
+
+        # 4. Blessed Stardust (Preferred "Blessed", but "Stardust" is not preferred for Apostle)
+        player_a4 = self._create_player_with_artifact("Apostle", "Blessed Stardust", "Apost4")
+        vp4 = player_a4.character.calculate_victory_points(self.game)
+        self.assertEqual(vp4, 5 + 5, "Blessed Stardust should give +5 VP (for Blessed), not +15 or extra for Stardust.")
+
+        # 5. Vegan Moonstone (Standard, non-preferred, non-plastic)
+        player_a5 = self._create_player_with_artifact("Apostle", "Vegan Moonstone", "Apost5")
+        vp5 = player_a5.character.calculate_victory_points(self.game)
+        self.assertEqual(vp5, 5 + 0, "Vegan Moonstone should give 0 artifact VP for Apostle.")
+        
+        # 6. Plastic Sepulchre (Plastic, preferred "Sepulchre")
+        player_a6 = self._create_player_with_artifact("Apostle", "Plastic Sepulchre", "Apost6")
+        vp6 = player_a6.character.calculate_victory_points(self.game)
+        self.assertEqual(vp6, 5 - 10, "Plastic Sepulchre should give -10 VP for Apostle.")
+
+        # 7. Radioactive Isotope (Special)
+        player_a7 = self._create_player_with_artifact("Apostle", "Radioactive Isotope", "Apost7")
+        vp7 = player_a7.character.calculate_victory_points(self.game)
+        self.assertEqual(vp7, 5 - 30, "Radioactive Isotope should give -30 VP for Apostle.")
+
+# --- Tests for Basic Action Scoring (game_engine.py via process_turn) ---
+class TestActionScoring(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        app.config['LOGIN_DISABLED'] = False
+
+    def setUp(self):
+        self.client = app.test_client()
+        users_db.clear() # Clear users for login isolation if any tests involve login
+
+        # Create a fresh game and entities for each test to ensure isolation
+        self.game = create_game() # Uses the global create_game to get a populated galaxy
+        
+        # Create specific players for roles, clear any defaults from create_game if necessary
+        self.game.players = [] 
+        self.pirate_user = User("PirateUser", "pwd")
+        self.pirate_player = Player(name="PirateUser", character_type="Pirate", user_id="PirateUser")
+        users_db["PirateUser"] = self.pirate_user
+        self.game.players.append(self.pirate_player)
+
+        self.berserker_user = User("BerserkerUser", "pwd")
+        self.berserker_player = Player(name="BerserkerUser", character_type="Berserker", user_id="BerserkerUser")
+        users_db["BerserkerUser"] = self.berserker_user
+        self.game.players.append(self.berserker_player)
+        
+        self.apostle_user = User("ApostleUser", "pwd")
+        self.apostle_player = Player(name="ApostleUser", character_type="Apostle", user_id="ApostleUser")
+        users_db["ApostleUser"] = self.apostle_user
+        self.game.players.append(self.apostle_player)
+
+        self.non_pirate_user = User("NonPirateUser", "pwd")
+        self.non_pirate_player = Player(name="NonPirateUser", character_type="Empire Builder", user_id="NonPirateUser")
+        users_db["NonPirateUser"] = self.non_pirate_user
+        self.game.players.append(self.non_pirate_player)
+        
+        self.target_player_user = User("TargetPlayerUser", "pwd")
+        self.target_player = Player(name="TargetPlayerUser", character_type="Merchant", user_id="TargetPlayerUser")
+        users_db["TargetPlayerUser"] = self.target_player_user
+        self.game.players.append(self.target_player)
+
+        # Assign homeworlds and starting fleets to ensure players are fully set up
+        for p in self.game.players:
+            assign_homeworld_to_player(p, self.game)
+            assign_starting_fleets_to_player(p, self.game)
+            p.victory_points = 0 # Reset VP for clean assertion
+            self.game.turn_vp_adjustments[p.user_id] = 0 # Initialize VP adjustments
+
+    def test_pirate_plunder_success(self):
+        world_to_plunder = self.pirate_player.home_world # Pirate plunders own world for simplicity
+        world_to_plunder.recovering_from_plunder_turns = 0 # Ensure not recovering
+        world_to_plunder.times_plundered_this_game = 0
+        
+        initial_vp = self.pirate_player.victory_points
+
+        plunder_order_dict = {"order_type": "PLUNDER", "world_id": world_to_plunder.id}
+        self.game.process_turn(self.pirate_player.user_id, [plunder_order_dict])
+        
+        # VP calculation happens at the end of process_turn based on turn_vp_adjustments
+        # process_turn itself updates player.victory_points
+        self.assertEqual(self.pirate_player.victory_points, initial_vp + 50)
+        self.assertEqual(world_to_plunder.recovering_from_plunder_turns, 3)
+        self.assertEqual(world_to_plunder.times_plundered_this_game, 1)
+
+    def test_non_pirate_plunder_penalty(self):
+        world_to_plunder = self.non_pirate_player.home_world
+        world_to_plunder.recovering_from_plunder_turns = 0
+        world_to_plunder.times_plundered_this_game = 0
+        initial_vp = self.non_pirate_player.victory_points
+
+        plunder_order_dict = {"order_type": "PLUNDER", "world_id": world_to_plunder.id}
+        self.game.process_turn(self.non_pirate_player.user_id, [plunder_order_dict])
+        
+        self.assertEqual(self.non_pirate_player.victory_points, initial_vp - 5)
+        self.assertEqual(world_to_plunder.recovering_from_plunder_turns, 3)
+        self.assertEqual(world_to_plunder.times_plundered_this_game, 1)
+
+    def test_berserker_pbb_drop(self):
+        target_world = self.target_player.home_world # Target another player's world
+        target_world.population = 50
+        target_world.convert_units = 10 # Total 60 pop for VP
+        
+        pbb_fleet = self.berserker_player.fleets[0]
+        pbb_fleet.location = target_world
+        pbb_fleet.has_pbb = True
+        initial_vp = self.berserker_player.victory_points
+
+        drop_pbb_order_dict = {"order_type": "DROP_PBB", "fleet_id": pbb_fleet.id, "world_id": target_world.id}
+        self.game.process_turn(self.berserker_player.user_id, [drop_pbb_order_dict])
+
+        expected_vp_gain = 200 + ((50 + 10) * 2) # 200 for PBB, 2 for each pop/convert
+        self.assertEqual(self.berserker_player.victory_points, initial_vp + expected_vp_gain)
+        self.assertTrue(target_world.is_destroyed_by_pbb)
+        self.assertEqual(target_world.population, 0)
+        self.assertFalse(pbb_fleet.has_pbb)
+
+    def test_apostle_jihad_declaration(self):
+        self.assertIsNone(self.apostle_player.jihad_target_player_id)
+        jihad_order_dict = {"order_type": "DECLARE_JIHAD", "target_player_id": self.target_player.user_id}
+        self.game.process_turn(self.apostle_player.user_id, [jihad_order_dict])
+        self.assertEqual(self.apostle_player.jihad_target_player_id, self.target_player.user_id)
+
+    def test_apostle_shooting_penalty_and_jihad_bonus(self):
+        # Scenario 1: Apostle fires, not on Jihad
+        apostle_fleet = self.apostle_player.fleets[0]
+        apostle_fleet.ships = 1 # 1 shot
+        apostle_fleet.location = self.target_player.home_world
+        
+        target_fleet = self.target_player.fleets[0]
+        target_fleet.location = self.target_player.home_world
+        target_fleet.ships = 5 
+        
+        initial_vp_apostle = self.apostle_player.victory_points
+        
+        fire_order_not_jihad_dict = {"order_type": "FIRE", "firing_fleet_id": apostle_fleet.id, "target_type": "FLEET", "world_id": self.target_player.home_world.id, "target_id": target_fleet.id}
+        self.game.process_turn(self.apostle_player.user_id, [fire_order_not_jihad_dict])
+        self.assertEqual(self.apostle_player.victory_points, initial_vp_apostle - 1, "Apostle should lose 1 VP for firing (not on Jihad).")
+
+        # Scenario 2: Apostle declares Jihad and fires at Jihad target's population
+        self.apostle_player.jihad_target_player_id = self.target_player.user_id # Declare Jihad
+        self.target_player.home_world.population = 10
+        self.target_player.home_world.owner = self.target_player # Make sure world is owned by target
+        
+        initial_vp_apostle_jihad = self.apostle_player.victory_points # VP after penalty from previous shot
+        
+        fire_order_jihad_dict = {"order_type": "FIRE", "firing_fleet_id": apostle_fleet.id, "target_type": "POPULATION", "world_id": self.target_player.home_world.id}
+        # 1 shot -> kills 0.5 pop units (rounded down to 0 if not handled carefully)
+        # The rule is 2 shots per pop. So 1 shot does not kill a pop unit.
+        # Let's make apostle_fleet have 2 ships for 1 pop kill.
+        apostle_fleet.ships = 2
+        self.game.process_turn(self.apostle_player.user_id, [fire_order_jihad_dict])
+        
+        # Expected: No -1 per shot penalty. +2 VP for 1 pop killed.
+        # VP before this shot was (initial_vp_apostle - 1). So new VP is (initial_vp_apostle - 1 + 2).
+        self.assertEqual(self.apostle_player.victory_points, initial_vp_apostle -1 + 2, "Apostle Jihad shooting VP incorrect.")
+        self.assertEqual(self.target_player.home_world.population, 9) # 1 pop killed
+
+    def test_martyr_points_for_apostle(self):
+        martyr_owner = self.apostle_player # Converts belong to this Apostle
+        attacker = self.berserker_player # Another player attacks
+        
+        world_with_converts = self._create_world_for_player(self.game, martyr_owner, id=901, name="MartyrWorld", population=0, convert_units=5, converts_owner_id=martyr_owner.user_id)
+        
+        attacker_fleet = self._create_fleet_for_player(self.game, attacker, id=902, name="AttackerFleet", location=world_with_converts, ships=10) # 10 shots
+        
+        # Scenario 1: Martyr owner NOT on Jihad
+        martyr_owner.jihad_target_player_id = None
+        initial_vp_martyr_owner = martyr_owner.victory_points
+        
+        # 10 shots / 2 per pop = 5 pop killed. All 5 converts are killed.
+        fire_order_dict = {"order_type": "FIRE", "firing_fleet_id": attacker_fleet.id, "target_type": "POPULATION", "world_id": world_with_converts.id}
+        self.game.process_turn(attacker.user_id, [fire_order_dict]) # Attacker's turn
+        
+        # Manually trigger VP update for martyr owner as it's not their turn
+        martyr_owner_base_vp = martyr_owner.character.calculate_victory_points(self.game)
+        martyr_owner_event_vp = self.game.turn_vp_adjustments.get(martyr_owner.user_id, 0)
+        martyr_owner.victory_points = martyr_owner_base_vp + martyr_owner_event_vp
+        
+        self.assertEqual(martyr_owner.victory_points, initial_vp_martyr_owner + 5, "Martyr owner should gain 5 VP for 5 converts killed.")
+        self.assertEqual(world_with_converts.convert_units, 0)
+
+        # Scenario 2: Martyr owner IS on Jihad
+        world_with_converts.convert_units = 5 # Reset converts
+        martyr_owner.jihad_target_player_id = self.target_player.user_id # On Jihad against someone else
+        initial_vp_martyr_owner_on_jihad = martyr_owner.victory_points # VP from previous scenario + 5
+        
+        self.game.turn_vp_adjustments[martyr_owner.user_id] = 0 # Reset event VPs for this specific action
+        
+        fire_order_dict_2 = {"order_type": "FIRE", "firing_fleet_id": attacker_fleet.id, "target_type": "POPULATION", "world_id": world_with_converts.id}
+        self.game.process_turn(attacker.user_id, [fire_order_dict_2])
+
+        martyr_owner_base_vp_2 = martyr_owner.character.calculate_victory_points(self.game)
+        martyr_owner_event_vp_2 = self.game.turn_vp_adjustments.get(martyr_owner.user_id, 0)
+        martyr_owner.victory_points = martyr_owner_base_vp_2 + martyr_owner_event_vp_2
+        
+        self.assertEqual(martyr_owner.victory_points, initial_vp_martyr_owner_on_jihad, "Martyr owner on Jihad should NOT gain martyr VP.")
+        self.assertEqual(world_with_converts.convert_units, 0)
+
+    # Helper to create world for action scoring tests
+    def _create_world_for_player(self, game_instance: Game, player: Optional[Player], id: int, name: str, 
+                                 population: int = 0, max_population: int = 100, 
+                                 industry: int = 0, mines: int = 0, stockpile: int = 0,
+                                 robot_units: int = 0, convert_units: int = 0, 
+                                 converts_owner_id: str | None = None,
+                                 iships: int = 0, pships: int = 0,
+                                 artifacts: list[Artifact] | None = None):
+        world = World(
+            id=id, name=name, owner=player, connections=[],
+            iships=iships, pships=pships, population=population,
+            max_population=max_population, industry=industry, mines=mines,
+            stockpile=stockpile, artifacts=artifacts if artifacts is not None else [],
+            robot_units=robot_units, convert_units=convert_units,
+            converts_owner_id=converts_owner_id
+        )
+        game_instance.worlds.append(world)
+        if player:
+            player.worlds.append(world)
+            if not player.home_world:
+                player.home_world = world
+        return world
+
+    # Helper to create fleet for action scoring tests
+    def _create_fleet_for_player(self, game_instance: Game, player: Player, id: int, name: str, location: World, ships: int = 0):
+        fleet = Fleet(id=id, name=name, owner=player, location=location, ships=ships)
+        game_instance.fleets.append(fleet)
+        player.fleets.append(fleet)
+        return fleet
+
+
 if __name__ == '__main__':
     # This allows running the tests directly from this file
     unittest.main(failfast=True) # Added failfast for quicker feedback during development
